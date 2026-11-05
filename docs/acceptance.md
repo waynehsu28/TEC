@@ -89,6 +89,26 @@ Windows 實機驗證需在目標 Windows x64／Node.js 24 LTS 電腦執行；Lin
 
 以上為本機模擬及自動化驗證，**本次沒有建立真正的 GitHub Codespace，也沒有宣稱容器映像建置、GitHub 帳號驗證或平台轉送已實測成功**。實際使用時依 [Codespaces 操作說明](codespaces.md) 建立／重建容器，並維持 3000 連接埠 Private。私人連接埠由 GitHub 驗證；應用程式仍沒有自己的登入權限。
 
+## 海空運國家價擴充驗證（2026-11-05）
+
+依使用者確認的規則，空運以 KG、海運併櫃以 CBM、海運整櫃以指定櫃型的櫃數計費；起訖國家相同且合約其他條件相符時，目的國不同城市套用同一份單位運價。每項派送／附加費是否已含仍由合約逐項標記，不假設全包。
+
+最終完整結果為 **102 passed、0 failed、0 skipped**，共 9 個測試檔：既有引擎 34、海空運／國家計價 15、資料保存 16、原資料庫升級 1、PDF 9、API 6、Logo 4、預覽來源 11、程序生命週期 6。`npm run typecheck`、`npm run build` 均通過。
+
+追加式 migration 已對只有原始 schema 的資料庫副本執行，保留舊客戶、合約版本、正規化報價資料、修訂關係及**舊 snapshot JSON 原始字串**。舊資料預設為 AIR／AIRPORT／PER_KG，不會猜測或自動轉成國家價。國家合約識別方式另測試了特殊分隔字元，不會誤把不同承運人／服務條件當成相同合約。
+
+真實 Chromium 操作在獨立暫存 SQLite 建立三份明確標示 Demo 的合約與三份報價：
+
+- 空運 TW → US：同樣 420 KG 貨物，在 Los Angeles 與 New York 均為 USD 1,806.00。
+- 海運 LCL TW → US：2.52 CBM × Demo 單價 USD 100，加未含文件費 USD 10，總額 USD 262.00；已含派送費不重收。
+- 海運 FCL TW → US：2 × 40HQ × Demo 單價 USD 1,500，總額 USD 3,000.00；不填貨物尺寸／重量仍可計櫃，已含重量類費用不重收，也不顯示虛構零重量。
+
+以上價格只作驗證，不是真實客戶合約。瀏覽器同時驗證合約編輯建立新版本後舊報價金額不變、海運歷史篩選、三種正式 PDF 下載及重新載入後資料保存，無 browser page errors。正式工作資料庫沒有插入 Demo 客戶、合約或報價。
+
+海運 PDF 文字擷取顯示國家、城市／港口備註、CBM 或櫃型／櫃數與售價；不顯示空運材積重或內部成本／毛利。既有空運 PDF、私人 Codespaces 存取限制及備份方式繼續保留。
+
+操作與更新方式見 [海空運國家價操作說明](air-sea-country-rates.md) 與 README；已有資料更新前先備份，停止服務後再執行 `git pull --ff-only`、`npm run db:setup` 及 `npm run codespaces:start`。
+
 ## 第一版未納入
 
 正式身分驗證與存取控制、外網部署、客戶入口、航空公司即時 API、自動成本與匯率來源、Weight Break Optimization、批次 Excel 匯入匯出、多使用者協作、會計入帳與稅額計算。不提供未接資料庫的假操作按鈕，也不自動建立真實客戶或運價。

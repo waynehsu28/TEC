@@ -17,6 +17,9 @@ function asContract(row: DbContract): ContractRecord {
     id: row.id, customerId: row.customerId, number: row.number, status: row.status as ContractRecord['status'],
     versions: row.versions.map(v => ({
       id: v.id, contractId: v.contractId, version: v.version, origin: v.origin, destination: v.destination,
+      transportMode: v.transportMode as ContractVersion['transportMode'], routeScope: v.routeScope as ContractVersion['routeScope'],
+      originCountry: v.originCountry, destinationCountry: v.destinationCountry, pricingBasis: v.pricingBasis as ContractVersion['pricingBasis'],
+      seaShipmentType: v.seaShipmentType as ContractVersion['seaShipmentType'], containerType: v.containerType as ContractVersion['containerType'],
       airline: v.airline, serviceType: v.serviceType, commodity: v.commodity, effectiveDate: v.effectiveDate,
       expiryDate: v.expiryDate, currency: v.currency as ContractVersion['currency'], rateType: v.rateType as ContractVersion['rateType'],
       minimumCharge: v.minimumCharge, normalRate: v.normalRate, remarks: v.remarks,
@@ -36,6 +39,12 @@ function asQuote(row: { id: string; number: string; revision: number; rootId: st
     status: row.status as QuoteRecord['status'], createdAt: row.createdAt.toISOString(), snapshot: JSON.parse(row.snapshot) as QuoteSnapshot };
 }
 function routeKey(input: ContractInput) {
+  // Preserve the original key for migrated airport contracts. Country rates deliberately
+  // exclude optional city/port descriptions so one country price cannot be duplicated by city.
+  if (input.routeScope === 'COUNTRY') {
+    return JSON.stringify([input.transportMode ?? 'AIR', 'COUNTRY', input.originCountry ?? '', input.destinationCountry ?? '',
+      input.seaShipmentType ?? '', input.containerType ?? '', input.airline, input.serviceType, input.commodity].map(v => v.trim().toUpperCase()));
+  }
   return [input.origin, input.destination, input.airline, input.serviceType, input.commodity].map(v => v.trim().toUpperCase()).join('|');
 }
 function versionData(input: ContractInput, version: number) {
@@ -78,7 +87,7 @@ export function createService(client: PrismaClient) {
     const input = quoteSchema.parse(raw) as QuoteInput;
     const customer = asCustomer(await ensureCustomer(input.customerId, true));
     const settings = await getSettings();
-    const weights = calculateWeights(input.cargo, settings);
+    const weights = calculateWeights(input.cargo, settings, input.transportMode ?? 'AIR');
     const matches = await candidates(input);
     let contract: ContractCandidate | null = null;
     if (input.contractVersionId) {
@@ -92,12 +101,14 @@ export function createService(client: PrismaClient) {
     let freight: FreightResult;
     if (contract) {
       if (input.manualFreight) throw new ServiceError('已有適用合約，不可同時使用手動非合約售價。');
-      freight = calculateFreight(contract, weights.chargeableWeight);
+      freight = calculateFreight(contract, weights, { containerCount: input.containerCount });
     } else {
       if (!input.manualFreight) throw new ServiceError('No Valid Contract Rate：請輸入手動非合約售價。');
       freight = { amount: new Decimal(input.manualFreight.amount).toDecimalPlaces(2, Decimal.ROUND_HALF_UP).toFixed(2), currency: input.manualFreight.currency, rate: '', appliedBreak: 'MANUAL', minimumApplied: false };
     }
-    const charges = calculateCharges(contract?.charges ?? [], input.chargeOverrides, input.temporaryCharges, weights);
+    const charges = calculateCharges(contract?.charges ?? [], input.chargeOverrides, input.temporaryCharges, weights, {
+      transportMode: input.transportMode ?? 'AIR', seaShipmentType: input.seaShipmentType, containerCount: input.containerCount,
+    });
     const finance = calculateFinance(freight, charges, input.costs, input.costsComplete, input.analysisCurrency, input.fxRate);
     return { input: { ...input, contractVersionId: contract?.id ?? null }, customer, company: { name: settings.companyName, logo: settings.companyLogo },
       contract, weights, freight, charges, finance, settings: { volumeDivisor: settings.volumeDivisor, weightIncrement: settings.weightIncrement }, createdAt: new Date().toISOString() };
@@ -185,6 +196,10 @@ export function createService(client: PrismaClient) {
         }
         const row = await tx.quote.create({ data: {
           number, revision, rootId, customerId: input.customerId, contractVersionId: snapshot.contract?.id ?? null,
+          transportMode: input.transportMode ?? 'AIR', routeScope: input.routeScope ?? 'AIRPORT',
+          originCountry: input.originCountry ?? '', destinationCountry: input.destinationCountry ?? '',
+          pricingBasis: snapshot.freight.basis ?? 'MANUAL', seaShipmentType: input.seaShipmentType ?? '',
+          containerType: input.containerType ?? '', containerCount: input.containerCount ?? 0,
           status: input.status, snapshot: JSON.stringify(snapshot), cargo: { create: input.cargo },
           charges: { create: snapshot.charges }, costs: { create: input.costs },
           ...(previousQuoteId ? { revisions: { create: { previousQuoteId, revision } } } : {}),

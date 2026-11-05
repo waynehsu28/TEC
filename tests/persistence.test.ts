@@ -19,6 +19,14 @@ function quoteInput(customerId: string): QuoteInput {
     cargo: [{ pieces: 10, length: '70', width: '60', height: '60', grossWeight: '35', weightMode: 'PER_PIECE' }], contractVersionId: null, manualFreight: null, chargeOverrides: [], temporaryCharges: [],
     costs: [{ name: 'Airline Freight Cost', amount: '1344', currency: 'USD', status: 'ACTUAL' }], costsComplete: true, analysisCurrency: 'USD', fxRate: '', fxDate: '', validity: '2026-12-01', remarks: '', terms: '', status: 'Quoted', revisionOfId: null };
 }
+function countryContract(customerId: string): ContractInput {
+  return { ...contractInput(customerId), transportMode: 'AIR', routeScope: 'COUNTRY', originCountry: 'TW', destinationCountry: 'US',
+    pricingBasis: 'PER_KG', seaShipmentType: '', containerType: '', origin: '', destination: '' };
+}
+function countryQuote(customerId: string): QuoteInput {
+  return { ...quoteInput(customerId), transportMode: 'AIR', routeScope: 'COUNTRY', originCountry: 'TW', destinationCountry: 'US',
+    seaShipmentType: '', containerType: '', containerCount: 0, origin: '', destination: '' };
+}
 beforeAll(() => {
   execFileSync(process.execPath, [path.resolve('node_modules/prisma/build/index.js'), 'migrate', 'deploy'], { cwd: process.cwd(), env: { ...process.env, DATABASE_URL: datasourceUrl }, stdio: 'pipe' });
 }, 60_000);
@@ -144,5 +152,90 @@ describe('real SQLite persistence and authoritative quotation workflow', () => {
     await api.updateSettings({ ...settings, companyName: 'New Co' });
     expect((await api.getQuote(quote.id)).snapshot.company.name).toBe('Original Co');
     expect(await client.exchangeRate.count()).toBe(2);
+  });
+  it('uses one customer country air price across US cities without duplicating country route identity', async () => {
+    const a = await api.createCustomer(customerInput);
+    const contract = await api.createContract(countryContract(a.id));
+    const losAngeles = await api.createQuote({ ...countryQuote(a.id), origin: 'Taipei', destination: 'Los Angeles' });
+    const newYork = await api.createQuote({ ...countryQuote(a.id), origin: 'Kaohsiung', destination: 'New York, NY' });
+    expect(losAngeles.snapshot.freight).toMatchObject({ amount: '1806.00', basis: 'PER_KG', quantity: '420', unit: 'KG' });
+    expect(newYork.snapshot.freight).toEqual(losAngeles.snapshot.freight);
+    expect(newYork.snapshot.contract?.id).toBe(contract.versions[0].id);
+    expect(await client.quote.findUniqueOrThrow({ where: { id: newYork.id } })).toMatchObject({
+      transportMode: 'AIR', routeScope: 'COUNTRY', originCountry: 'TW', destinationCountry: 'US', pricingBasis: 'PER_KG',
+    });
+    await expect(api.createContract({ ...countryContract(a.id), origin: 'Taipei', destination: 'Seattle' })).rejects.toThrow();
+  });
+  it('isolates country matches by country, direction, customer, transport mode, shipment type and container', async () => {
+    const a = await api.createCustomer(customerInput);
+    const b = await api.createCustomer({ ...customerInput, code: 'TEST-B' });
+    const contract = await api.createContract(countryContract(a.id));
+    expect(await api.match(countryQuote(a.id))).toHaveLength(1);
+    for (const input of [
+      { ...countryQuote(a.id), destinationCountry: 'CA' },
+      { ...countryQuote(a.id), originCountry: 'US', destinationCountry: 'TW' },
+      countryQuote(b.id),
+      { ...countryQuote(a.id), transportMode: 'SEA', seaShipmentType: 'LCL' },
+    ]) expect(await api.match(input)).toHaveLength(0);
+    await expect(api.preview({ ...countryQuote(b.id), contractVersionId: contract.versions[0].id })).rejects.toThrow('指定合約不符合');
+    const sea = await api.createContract({ ...countryContract(a.id), transportMode: 'SEA', pricingBasis: 'PER_CONTAINER', seaShipmentType: 'FCL', containerType: '40HQ', normalRate: '2000', breaks: [] });
+    expect(await api.match({ ...countryQuote(a.id), transportMode: 'SEA', seaShipmentType: 'FCL', containerType: '20GP' })).toHaveLength(0);
+    expect(await api.match({ ...countryQuote(a.id), transportMode: 'SEA', seaShipmentType: 'LCL' })).toHaveLength(0);
+    expect((await api.match({ ...countryQuote(a.id), transportMode: 'SEA', seaShipmentType: 'FCL', containerType: '40HQ' }))[0].id).toBe(sea.versions[0].id);
+  });
+  it('keeps country route identities distinct when carrier or service contains a delimiter', async () => {
+    const a = await api.createCustomer(customerInput);
+    const firstTerms = { ...countryContract(a.id), airline: 'A|B', serviceType: 'C' };
+    const first = await api.createContract(firstTerms);
+    const second = await api.createContract({ ...countryContract(a.id), airline: 'A', serviceType: 'B|C' });
+    expect(first.number).toBe(second.number);
+    expect((await api.getContracts(a.id))).toHaveLength(2);
+    const rows = await client.contract.findMany({ where: { customerId: a.id } });
+    expect(new Set(rows.map(row => row.routeKey)).size).toBe(2);
+    expect((await api.match({ ...countryQuote(a.id), airline: 'A|B', serviceType: 'C' }))[0].id).toBe(first.versions[0].id);
+    expect((await api.match({ ...countryQuote(a.id), airline: 'A', serviceType: 'B|C' }))[0].id).toBe(second.versions[0].id);
+    await expect(api.createContract({ ...firstTerms, origin: 'Taipei', destination: 'Seattle' })).rejects.toMatchObject({ code: 'P2002' });
+  });
+  it('persists sea LCL cubic meter pricing and explicitly included destination charges', async () => {
+    const a = await api.createCustomer(customerInput);
+    await api.createContract({ ...countryContract(a.id), transportMode: 'SEA', pricingBasis: 'PER_CBM', seaShipmentType: 'LCL',
+      minimumCharge: '', normalRate: '80', breaks: [], charges: [
+        { name: 'Destination delivery', basis: 'PER_CBM', rate: '30', currency: 'USD', included: true },
+        { name: 'Origin handling', basis: 'PER_CBM', rate: '12', currency: 'USD', included: false },
+      ] });
+    const quote = await api.createQuote({ ...countryQuote(a.id), transportMode: 'SEA', seaShipmentType: 'LCL',
+      cargo: [{ pieces: 2, length: '100', width: '100', height: '150', grossWeight: '450', weightMode: 'GROUP_TOTAL' }] });
+    expect(quote.snapshot.weights).toMatchObject({ cbm: '3', grossWeight: '450', volumeWeight: null, chargeableWeight: null });
+    expect(quote.snapshot.freight).toMatchObject({ amount: '240.00', basis: 'PER_CBM', quantity: '3', unit: 'CBM' });
+    expect(quote.snapshot.charges.find(c => c.name === 'Destination delivery')).toMatchObject({ included: true, amount: '0.00' });
+    expect(quote.snapshot.charges.find(c => c.name === 'Origin handling')?.amount).toBe('36.00');
+    expect(quote.snapshot.finance.revenue).toBe('276.00');
+    expect(await client.quote.findUniqueOrThrow({ where: { id: quote.id } })).toMatchObject({ transportMode: 'SEA', seaShipmentType: 'LCL', pricingBasis: 'PER_CBM' });
+    expect((await api.getQuote(quote.id)).snapshot.freight).toEqual(quote.snapshot.freight);
+  });
+  it('prices multiple FCL containers without fabricated cargo measurements and preserves issued snapshots', async () => {
+    const a = await api.createCustomer(customerInput);
+    const terms: ContractInput = { ...countryContract(a.id), transportMode: 'SEA', pricingBasis: 'PER_CONTAINER', seaShipmentType: 'FCL', containerType: '40HQ',
+      minimumCharge: '', normalRate: '1800', breaks: [], charges: [
+        { name: 'Destination delivery', basis: 'PER_CONTAINER', rate: '100', currency: 'USD', included: true },
+        { name: 'Terminal handling', basis: 'PER_CONTAINER', rate: '150', currency: 'USD', included: false },
+      ] };
+    const contract = await api.createContract(terms);
+    const input: QuoteInput = { ...countryQuote(a.id), transportMode: 'SEA', seaShipmentType: 'FCL', containerType: '40HQ', containerCount: 3, cargo: [] };
+    const quote = await api.createQuote(input);
+    const originalJson = (await client.quote.findUniqueOrThrow({ where: { id: quote.id } })).snapshot;
+    expect(quote.snapshot.weights).toMatchObject({ volumeWeight: null, chargeableWeight: null, cargoProvided: false });
+    expect(quote.snapshot.freight).toMatchObject({ amount: '5400.00', basis: 'PER_CONTAINER', quantity: '3', unit: 'CONTAINER' });
+    expect(quote.snapshot.charges.find(c => c.name === 'Destination delivery')?.amount).toBe('0.00');
+    expect(quote.snapshot.charges.find(c => c.name === 'Terminal handling')?.amount).toBe('450.00');
+    expect(quote.snapshot.finance.revenue).toBe('5850.00');
+    expect(await client.quoteCargoItem.count({ where: { quoteId: quote.id } })).toBe(0);
+    expect(await client.quote.findUniqueOrThrow({ where: { id: quote.id } })).toMatchObject({ containerCount: 3, containerType: '40HQ', pricingBasis: 'PER_CONTAINER' });
+    await api.updateContract(contract.id, { ...terms, normalRate: '2200', charges: [] });
+    expect((await api.preview(input)).freight.amount).toBe('6600.00');
+    expect((await client.quote.findUniqueOrThrow({ where: { id: quote.id } })).snapshot).toBe(originalJson);
+    await expect(api.preview({ ...input, contractVersionId: contract.versions[0].id })).rejects.toThrow('指定合約不符合');
+    await expect(api.preview({ ...input, containerCount: 0 })).rejects.toThrow();
+    await expect(api.preview({ ...input, temporaryCharges: [{ name: 'Measured handling', basis: 'PER_CBM', rate: '5', currency: 'USD', included: false }] })).rejects.toThrow();
   });
 });

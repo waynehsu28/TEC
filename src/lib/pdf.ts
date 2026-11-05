@@ -2,6 +2,7 @@ import PDFDocument from 'pdfkit';
 import Decimal from 'decimal.js';
 import path from 'node:path';
 import type { Currency, QuoteRecord, QuoteSnapshot } from './types';
+import { chargeBasisLabels, freightBasisLabels, routeLabel } from './transport';
 
 /** Deliberate allowlist: never pass an entire quote/snapshot into a PDF template. */
 export function customerPdfData(snapshot: QuoteSnapshot) {
@@ -18,6 +19,10 @@ export function customerPdfData(snapshot: QuoteSnapshot) {
       contact: snapshot.customer.contact, email: snapshot.customer.email, phone: snapshot.customer.phone,
     },
     route: {
+      transportMode: snapshot.input.transportMode, routeScope: snapshot.input.routeScope,
+      originCountry: snapshot.input.originCountry, destinationCountry: snapshot.input.destinationCountry,
+      seaShipmentType: snapshot.input.seaShipmentType, containerType: snapshot.input.containerType,
+      containerCount: snapshot.input.containerCount,
       origin: snapshot.input.origin, destination: snapshot.input.destination,
       airline: snapshot.input.airline, serviceType: snapshot.input.serviceType,
       commodity: snapshot.input.commodity, shipmentDate: snapshot.input.shipmentDate,
@@ -27,8 +32,10 @@ export function customerPdfData(snapshot: QuoteSnapshot) {
       grossWeight: item.grossWeight, weightMode: item.weightMode,
     })),
     weights: { pieces: snapshot.weights.pieces, grossWeight: snapshot.weights.grossWeight, cbm: snapshot.weights.cbm,
-      volumeWeight: snapshot.weights.volumeWeight, chargeableWeight: snapshot.weights.chargeableWeight },
+      volumeWeight: snapshot.weights.volumeWeight, chargeableWeight: snapshot.weights.chargeableWeight,
+      cargoProvided: snapshot.weights.cargoProvided ?? snapshot.input.cargo.length > 0 },
     freight: { amount: snapshot.freight.amount, currency: snapshot.freight.currency,
+      basis: snapshot.freight.basis, quantity: snapshot.freight.quantity, unit: snapshot.freight.unit,
       appliedBreak: snapshot.freight.appliedBreak, rate: snapshot.freight.rate,
       minimumApplied: snapshot.freight.minimumApplied },
     charges: snapshot.charges.map(charge => ({ name: charge.name, basis: charge.basis,
@@ -39,7 +46,7 @@ export function customerPdfData(snapshot: QuoteSnapshot) {
 }
 
 const basisNames = {
-  PER_KG: '每公斤 Per KG', PER_SHIPMENT: '每票 Per Shipment', PER_PIECE: '每件 Per Piece',
+  ...chargeBasisLabels,
   MINIMUM: '最低收費 Minimum', MANUAL: '手動金額 Manual',
 };
 const money = (value: string) => new Decimal(value).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
@@ -48,9 +55,21 @@ const dateLabel = (value: string) => new Date(value).toLocaleDateString('zh-TW',
 /** The only renderer entry point; uses persisted customer-facing snapshot fields. */
 export async function generateQuotePdf(quote: QuoteRecord): Promise<Buffer> {
   const data = customerPdfData(quote.snapshot);
+  const isSea = data.route.transportMode === 'SEA';
+  const title = isSea ? '海運報價單 Sea Freight Quotation' : '航空貨運報價單 Air Freight Quotation';
+  const freightDescription = () => {
+    // Older immutable snapshots lack basis metadata and keep their original applied break.
+    if (!data.freight.basis) return data.freight.minimumApplied ? '最低收費' : data.freight.appliedBreak;
+    const unit = data.freight.basis === 'PER_KG' ? 'KG' : data.freight.basis === 'PER_CBM' ? 'CBM' : 'CONTAINER';
+    return [
+      data.freight.minimumApplied ? '最低收費' : '', freightBasisLabels[data.freight.basis],
+      data.freight.quantity === undefined ? '' : `${data.freight.quantity} ${unit}`,
+      data.freight.rate === '' ? '' : `${data.freight.currency} ${data.freight.rate} / ${unit}`,
+    ].filter(Boolean).join('\n');
+  };
   return await new Promise<Buffer>((resolve, reject) => {
     const doc = new PDFDocument({ size: 'A4', margin: 42, bufferPages: true,
-      info: { Title: `航空貨運報價單 ${quote.number} / R${quote.revision}`, Author: data.company.name },
+      info: { Title: `${isSea ? '海運報價單' : '航空貨運報價單'} ${quote.number} / R${quote.revision}`, Author: data.company.name },
     });
     const chunks: Buffer[] = [];
     doc.on('data', chunk => chunks.push(Buffer.from(chunk)));
@@ -99,27 +118,35 @@ export async function generateQuotePdf(quote: QuoteRecord): Promise<Buffer> {
         doc.image(bytes, right - 78, headerY, { fit: [78, 50], align: 'right' });
       }
       doc.fontSize(18).fillColor('#153b62').text(data.company.name || '公司名稱未設定', left, headerY, { width: width - 90 });
-      doc.fontSize(13).fillColor('#38556d').text('航空貨運報價單 Air Freight Quotation', left, doc.y + 7, { width });
+      doc.fontSize(13).fillColor('#38556d').text(title, left, doc.y + 7, { width });
       doc.y = Math.max(doc.y + 15, headerY + 65);
       text(`報價編號：${quote.number}    修訂版本：R${quote.revision}`);
       text(`報價日期：${dateLabel(quote.snapshot.createdAt)}    報價有效至：${data.validity}`);
       heading('客戶與運輸資料 Customer / Shipment');
       text(`客戶：${data.customer.name} (${data.customer.code})`);
       if (data.customer.contact || data.customer.email || data.customer.phone) text(`聯絡人：${data.customer.contact}    Email：${data.customer.email}    電話：${data.customer.phone}`);
-      text(`航線：${data.route.origin} → ${data.route.destination}    航空公司：${data.route.airline || '未指定'}`);
+      text(`航線：${routeLabel(data.route)}    ${isSea ? '船公司／承運人' : '航空公司'}：${data.route.airline || '未指定'}`);
+      if (data.route.routeScope === 'COUNTRY' && (data.route.origin || data.route.destination)) {
+        text(`起運地點：${data.route.origin || '未指定'}    目的地點：${data.route.destination || '未指定'}`);
+      }
+      if (isSea) text(data.route.seaShipmentType === 'FCL'
+        ? `海運整櫃 FCL    櫃型：${data.route.containerType || '未指定'}    櫃數：${data.route.containerCount ?? '未指定'}`
+        : '海運散貨 LCL');
       text(`出貨日期：${data.route.shipmentDate}    服務類型：${data.route.serviceType || '未指定'}    貨物：${data.route.commodity || '未指定'}`);
       heading('貨物明細 Cargo Details');
-      const cargoColumns = [42, 177, 150, width - 369];
-      row(['件數', '長 × 寬 × 高 (cm)', '實際重量輸入 (kg)', '重量模式'], cargoColumns, true);
-      for (const item of data.cargo) row([String(item.pieces), `${item.length} × ${item.width} × ${item.height}`, item.grossWeight,
-        item.weightMode === 'PER_PIECE' ? '單件重量' : '該組總重量'], cargoColumns);
-      doc.moveDown(0.6);
-      text(`總件數：${data.weights.pieces}    總實重：${data.weights.grossWeight} KG    體積：${data.weights.cbm} CBM`);
-      text(`材積重量：${data.weights.volumeWeight} KG    計費重量 Chargeable Weight：${data.weights.chargeableWeight} KG`, 11);
+      if (data.weights.cargoProvided) {
+        const cargoColumns = [42, 177, 150, width - 369];
+        row(['件數', '長 × 寬 × 高 (cm)', '實際重量輸入 (kg)', '重量模式'], cargoColumns, true);
+        for (const item of data.cargo) row([String(item.pieces), `${item.length} × ${item.width} × ${item.height}`, item.grossWeight,
+          item.weightMode === 'PER_PIECE' ? '單件重量' : '該組總重量'], cargoColumns);
+        doc.moveDown(0.6);
+        text(`總件數：${data.weights.pieces}    總實重：${data.weights.grossWeight} KG    體積：${data.weights.cbm} CBM`);
+        if (!isSea) text(`材積重量：${data.weights.volumeWeight} KG    計費重量 Chargeable Weight：${data.weights.chargeableWeight} KG`, 11);
+      } else text('尚未提供貨物尺寸及重量明細。');
       heading('客戶應付費用 Selling Charges');
       const chargeColumns = [222, 115, 55, width - 392];
       row(['費用項目', '計費方式', '幣別', '金額'], chargeColumns, true);
-      row(['航空運費 Air Freight', data.freight.minimumApplied ? '最低收費' : data.freight.appliedBreak,
+      row([isSea ? '海運運費 Sea Freight' : '航空運費 Air Freight', freightDescription(),
         data.freight.currency, money(data.freight.amount)], chargeColumns);
       for (const charge of data.charges) row([charge.name, charge.included ? '已包含 Included' : basisNames[charge.basis], charge.currency,
         charge.included ? '已包含' : money(charge.amount)], chargeColumns);

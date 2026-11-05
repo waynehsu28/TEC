@@ -32,6 +32,37 @@ function quoteFixture(): QuoteRecord {
     },
   };
 }
+
+function countryQuoteFixture(shipment: 'AIR' | 'LCL' | 'FCL'): QuoteRecord {
+  const quote = quoteFixture();
+  const snapshot = quote.snapshot;
+  Object.assign(snapshot.input, {
+    transportMode: shipment === 'AIR' ? 'AIR' : 'SEA', routeScope: 'COUNTRY',
+    originCountry: 'TW', destinationCountry: 'US', origin: '高雄', destination: '紐約',
+    airline: shipment === 'AIR' ? 'BR' : 'TEST SHIPPING',
+    seaShipmentType: shipment === 'AIR' ? '' : shipment,
+  });
+  snapshot.charges = [
+    { name: '目的地派送費', basis: 'PER_SHIPMENT', currency: 'USD', included: true, originalRate: '999', appliedRate: '999', originalAmount: '999.00', amount: '0.00', temporary: false },
+    { name: '目的地文件費', basis: shipment === 'FCL' ? 'PER_CONTAINER' : shipment === 'LCL' ? 'PER_CBM' : 'PER_KG', currency: 'TWD', included: false, originalRate: '100', appliedRate: '100', originalAmount: '100.00', amount: '100.00', temporary: false },
+  ];
+  if (shipment === 'AIR') {
+    Object.assign(snapshot.freight, { basis: 'PER_KG', quantity: '420', unit: 'KG' });
+  } else {
+    snapshot.weights.volumeWeight = null;
+    snapshot.weights.chargeableWeight = null;
+    if (shipment === 'LCL') {
+      snapshot.freight = { basis: 'PER_CBM', quantity: '2.52', unit: 'CBM', amount: '201.60', currency: 'USD', rate: '80.00', appliedBreak: '+1 CBM', minimumApplied: false };
+    } else {
+      snapshot.input.containerType = '40HQ';
+      snapshot.input.containerCount = 2;
+      snapshot.input.cargo = [];
+      snapshot.weights = { pieces: 0, grossWeight: '0', cbm: '0', volumeWeight: null, chargeableWeight: null, cargoProvided: false };
+      snapshot.freight = { basis: 'PER_CONTAINER', quantity: '2', unit: 'CONTAINER', amount: '2500.00', currency: 'USD', rate: '1250.00', appliedBreak: '+1 CONTAINER', minimumApplied: false };
+    }
+  }
+  return quote;
+}
 const extractionAvailable = spawnSync('pdftotext', ['-v'], { timeout: 5000 }).status === 0;
 function extract(buffer: Buffer) {
   const directory = mkdtempSync(path.join(tmpdir(), 'tec-pdf-'));
@@ -40,6 +71,16 @@ function extract(buffer: Buffer) {
     writeFileSync(filename, buffer);
     return spawnSync('pdftotext', ['-layout', filename, '-'], { encoding: 'utf8', timeout: 10000 });
   } finally { rmSync(directory, { recursive: true, force: true }); }
+}
+
+async function quoteText(quote: QuoteRecord) {
+  const extracted = extract(await generateQuotePdf(quote));
+  expect(extracted.status, extracted.stderr).toBe(0);
+  return extracted.stdout.replace(/\s/g, '');
+}
+
+function expectNoInternalData(content: string) {
+  for (const forbidden of ['INTERNAL_COST_SECRET', '987654.32', '987,654.32', '985832.695', '54118.312', 'GrossProfit', 'InternalCost', 'Markup', 'CUSTOMER_INTERNAL_SECRET']) expect(content).not.toContain(forbidden);
 }
 
 describe('正式客戶 PDF 與資訊隔離', () => {
@@ -52,6 +93,17 @@ describe('正式客戶 PDF 與資訊隔離', () => {
     expect(data.totals).toEqual([{ currency: 'USD', amount: '1806.00' }, { currency: 'TWD', amount: '500.00' }]);
     expect(data.charges[0]).toMatchObject({ included: true, amount: '0.00' });
     expect(data.terms).toBe('使用者自行輸入之報價條件。');
+  });
+
+  it('allowlists multimodal billing and routing fields without copying the contract or raw snapshot', () => {
+    const quote = countryQuoteFixture('FCL');
+    const data = customerPdfData(quote.snapshot);
+    expect(data.route).toMatchObject({ transportMode: 'SEA', routeScope: 'COUNTRY', originCountry: 'TW', destinationCountry: 'US', seaShipmentType: 'FCL', containerType: '40HQ', containerCount: 2 });
+    expect(data.freight).toMatchObject({ basis: 'PER_CONTAINER', quantity: '2', unit: 'CONTAINER' });
+    expect(data.weights.cargoProvided).toBe(false);
+    expect(data.totals).toEqual([{ currency: 'USD', amount: '2500.00' }, { currency: 'TWD', amount: '100.00' }]);
+    const serialized = JSON.stringify(data);
+    for (const forbidden of ['contract', 'costs', 'finance', 'settings', 'originalRate', 'originalAmount', 'INTERNAL_COST_SECRET', 'CUSTOMER_INTERNAL_SECRET']) expect(serialized).not.toContain(forbidden);
   });
 
   it('renders an actual downloadable PDF without relying on platform fonts or an external API', async () => {
@@ -72,12 +124,34 @@ describe('正式客戶 PDF 與資訊隔離', () => {
 
   it.skipIf(!extractionAvailable)('extracts Traditional Chinese and selling prices from actual PDF while excluding all internal costs and profit', async () => {
     const quote = quoteFixture();
+    const persistedSnapshot = JSON.stringify(quote.snapshot);
     const buffer = await generateQuotePdf(quote);
+    expect(JSON.stringify(quote.snapshot)).toBe(persistedSnapshot);
     const extracted = extract(buffer);
     expect(extracted.status, extracted.stderr).toBe(0);
     const content = extracted.stdout.replace(/\s/g, '');
-    for (const expected of ['測試空運公司', '測試客戶甲', 'AFQ-20261105-0001', 'TPE', 'LAX', '420', '1,806.00', '500.00', '文件處理費', '使用者自行輸入之報價條件', '已包含']) expect(content).toContain(expected);
-    for (const forbidden of ['INTERNAL_COST_SECRET', '987654.32', '987,654.32', '985832.695', '54118.312', 'GrossProfit', 'InternalCost', 'Markup', 'CUSTOMER_INTERNAL_SECRET']) expect(content).not.toContain(forbidden);
+    for (const expected of ['測試空運公司', '航空貨運報價單AirFreightQuotation', '測試客戶甲', 'AFQ-20261105-0001', 'TPE', 'LAX', '+300KG', '420', '1,806.00', '500.00', '文件處理費', '使用者自行輸入之報價條件', '已包含']) expect(content).toContain(expected);
+    expectNoInternalData(content);
+  });
+
+  it.skipIf(!extractionAvailable)('prints a country-wide AIR price per KG with optional city details and explicit included fees', async () => {
+    const content = await quoteText(countryQuoteFixture('AIR'));
+    for (const expected of ['航空貨運報價單AirFreightQuotation', '台灣', '美國（全國適用）', '起運地點：高雄', '目的地點：紐約', '420KG', 'USD4.30/KG', '計費重量ChargeableWeight', '目的地派送費', '已包含', '目的地文件費', '每公斤PerKG']) expect(content).toContain(expected);
+    expectNoInternalData(content);
+  });
+
+  it.skipIf(!extractionAvailable)('prints SEA LCL CBM pricing and actual cargo without AIR weight calculations', async () => {
+    const content = await quoteText(countryQuoteFixture('LCL'));
+    for (const expected of ['海運報價單SeaFreightQuotation', '海運散貨LCL', '台灣', '美國（全國適用）', '船公司／承運人：TESTSHIPPING', '350KG', '2.52CBM', 'USD80.00/CBM', '201.60', '每立方米PerCBM', '目的地派送費', '已包含']) expect(content).toContain(expected);
+    for (const forbidden of ['AirFreight', '航空公司', '材積重量', 'ChargeableWeight', '+300KG', 'null', '6000']) expect(content).not.toContain(forbidden);
+    expectNoInternalData(content);
+  });
+
+  it.skipIf(!extractionAvailable)('prints SEA FCL containers and unit rates without treating missing cargo as zero measurements', async () => {
+    const content = await quoteText(countryQuoteFixture('FCL'));
+    for (const expected of ['海運報價單SeaFreightQuotation', '海運整櫃FCL', '台灣', '美國（全國適用）', '櫃型：40HQ', '櫃數：2', '2CONTAINER', 'USD1250.00/CONTAINER', '2,500.00', '每櫃PerContainer', '尚未提供貨物尺寸及重量明細', '目的地派送費', '已包含']) expect(content).toContain(expected);
+    for (const forbidden of ['AirFreight', '材積重量', 'ChargeableWeight', '總實重', '0CBM', '0KG', 'null', '+300KG']) expect(content).not.toContain(forbidden);
+    expectNoInternalData(content);
   });
 
   it.skipIf(!extractionAvailable)('uses the persisted quotation snapshot and retains user terms across multiple PDF pages', async () => {

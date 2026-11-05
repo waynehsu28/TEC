@@ -40,6 +40,13 @@ model ContractVersion {
   contractId    String
   contract      Contract @relation(fields: [contractId], references: [id], onDelete: Restrict)
   version       Int
+  transportMode String @default("AIR")
+  routeScope    String @default("AIRPORT")
+  originCountry String @default("")
+  destinationCountry String @default("")
+  pricingBasis  String @default("PER_KG")
+  seaShipmentType String @default("")
+  containerType String @default("")
   origin        String
   destination   String
   airline       String @default("")
@@ -58,6 +65,7 @@ model ContractVersion {
   createdAt     DateTime @default(now())
   @@unique([contractId, version])
   @@index([origin, destination, effectiveDate, expiryDate])
+  @@index([transportMode, routeScope, originCountry, destinationCountry, effectiveDate, expiryDate])
   @@map("ContractVersions")
 }
 model ContractRateBreak {
@@ -95,6 +103,14 @@ model Quote {
   contractVersionId String?
   contractVersion   ContractVersion? @relation(fields: [contractVersionId], references: [id], onDelete: Restrict)
   status            String
+  transportMode     String @default("AIR")
+  routeScope        String @default("AIRPORT")
+  originCountry     String @default("")
+  destinationCountry String @default("")
+  pricingBasis      String @default("PER_KG")
+  seaShipmentType   String @default("")
+  containerType     String @default("")
+  containerCount    Int @default(0)
   snapshot          String
   cargo             QuoteCargoItem[]
   charges           QuoteCharge[]
