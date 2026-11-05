@@ -41,6 +41,23 @@ describe('Freight — single break pricing and fixed MIN', () => {
     expect(calculateFreight(base,'10').amount).toBe('60.00');
     expect(calculateFreight(base,'1')).toMatchObject({ amount:'50.00',rate:'6',appliedBreak:'Normal',minimumApplied:true });
   });
+  it('uses the under-45 rate at 44.5 KG and the +45 rate at exactly 45 KG', () => {
+    expect(calculateFreight(base, '44.5')).toMatchObject({ amount: '267.00', rate: '6', appliedBreak: 'Normal', minimumApplied: false });
+    expect(calculateFreight(base, '45')).toMatchObject({ amount: '261.00', rate: '5.8', appliedBreak: '+45 KG', minimumApplied: false });
+  });
+  it('selects +45 after a 44.6 KG shipment rounds up to 45 chargeable KG', () => {
+    const shipment = calculateWeights([{ pieces: 1, length: '1', width: '1', height: '1', grossWeight: '44.6', weightMode: 'GROUP_TOTAL' }], settings);
+    expect(shipment).toMatchObject({ grossWeight: '44.6', chargeableWeight: '45' });
+    expect(calculateFreight(base, shipment)).toMatchObject({ amount: '261.00', rate: '5.8', appliedBreak: '+45 KG', quantity: '45', unit: 'KG' });
+  });
+  it('keeps the fixed MIN floor when an under-45 rate totals less than the minimum', () => {
+    expect(calculateFreight({ ...base, minimumCharge: '300' }, '44.5')).toMatchObject({ amount: '300.00', rate: '6', appliedBreak: 'Normal', minimumApplied: true });
+  });
+  it('accepts an explicit zero under-45 rate while retaining the +45 rate', () => {
+    const freeUnder45 = { ...base, normalRate: '0', minimumCharge: '' };
+    expect(calculateFreight(freeUnder45, '44.5')).toMatchObject({ amount: '0.00', rate: '0', appliedBreak: 'Normal', minimumApplied: false });
+    expect(calculateFreight(freeUnder45, '45')).toMatchObject({ amount: '261.00', rate: '5.8', appliedBreak: '+45 KG' });
+  });
   it('includes exact threshold boundaries', () => {
     expect(calculateFreight(base,'300')).toMatchObject({ rate:'4.3',amount:'1290.00' });
   });

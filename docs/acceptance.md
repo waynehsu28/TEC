@@ -139,6 +139,22 @@ Windows 實機驗證需在目標 Windows x64／Node.js 24 LTS 電腦執行；Lin
 
 本次只修改顯示與同步流程，沒有更動資料庫 schema 或刪除資料。測試使用獨立暫存資料庫，正式工作資料庫未加入 Demo 資料。既有 Codespace 須拉取最新程式並重新建置／啟動才會生效，單純 GitHub 推送不會更新已開啟的舊程序。
 
+## 空運未滿 45 KG 單價驗證（2026-11-05）
+
+空運合約重量表新增 Normal 列，用於維護未達首個已填級距的小重量單價；最小已填門檻為 +45 時顯示「未滿 45 KG」。沿用既有 Normal 欄位，不需資料庫 migration，舊合約價格可直接編輯；自訂 +30、只有 +100、未填級距及零單價的實際適用範圍均有測試。海運維持每 CBM／每櫃的 Normal 欄位，MIN 保持整票固定下限。
+
+完整回歸結果為 **141 passed、0 failed、0 skipped**，共 14 個測試檔；`npm run typecheck` 與 production build 通過。新增 4 項計算邊界與 7 項合約表單測試。
+
+Chromium 透過本機模擬 Codespaces HTTPS 代理操作 production server，在獨立暫存 SQLite 新增 Normal = USD 6/KG、+45 = USD 5.8/KG、MIN = USD 50 的 Demo 合約，完成保存、重載、編輯讀值及報價試算：
+
+| 實重 | 計費重 | 適用單價 | 基本運費 |
+| --- | --- | --- | --- |
+| 44.5 KG | 44.5 KG | Normal · USD 6/KG | USD 267.00 |
+| 45 KG | 45 KG | +45 · USD 5.8/KG | USD 261.00 |
+| 44.6 KG | 45 KG（0.5 KG 進位） | +45 · USD 5.8/KG | USD 261.00 |
+
+瀏覽器無 JavaScript 錯誤，API 保存的是 Normal 與正數 +45 門檻，未新增零或負級距。以上使用虛構測試價格，未將 Demo 資料寫入正式工作資料庫；本次沒有直接測試真正的 GitHub Codespace。
+
 ## 第一版未納入
 
 正式身分驗證與存取控制、外網部署、客戶入口、航空公司即時 API、自動成本與匯率來源、Weight Break Optimization、批次 Excel 匯入匯出、多使用者協作、會計入帳與稅額計算。不提供未接資料庫的假操作按鈕，也不自動建立真實客戶或運價。

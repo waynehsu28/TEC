@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import Decimal from 'decimal.js';
 import type { ChargeBasis, ChargeInput, ContainerType, ContractInput, ContractRecord, ContractVersion, Currency, Customer, FreightBasis, SeaShipmentType, TransportMode } from '@/lib/types';
 import { chargeBasisLabels, freightBasisLabels, modeName, routeLabel } from '@/lib/transport';
 import CountrySelect from './CountrySelect';
@@ -12,6 +13,16 @@ const freightUnits: Record<FreightBasis, string> = { PER_KG: 'KG', PER_CBM: 'CBM
 const newest = (contract: ContractRecord) => [...contract.versions].sort((a, b) => b.version - a.version)[0];
 const basisOf = (contract: Pick<ContractInput, 'pricingBasis'>): FreightBasis => contract.pricingBasis ?? 'PER_KG';
 const carrierLabel = (contract: Pick<ContractInput, 'transportMode' | 'airline'>) => contract.airline || (contract.transportMode === 'SEA' ? '不限船公司' : '不限航空公司');
+
+function normalAirRange(breaks: ContractInput['breaks']): string {
+  let first: Decimal | null = null;
+  for (const tier of breaks) {
+    if (!tier.rate.trim() || !/^(?:0|[1-9]\d*)(?:\.\d+)?$/.test(tier.weight.trim())) continue;
+    const weight = new Decimal(tier.weight.trim());
+    if (weight.gt(0) && (first === null || weight.lt(first))) first = weight;
+  }
+  return first ? `未滿 ${first.toFixed()} KG` : '全部計費重量';
+}
 
 function blank(customerId: string): ContractInput {
   return {
@@ -168,11 +179,18 @@ export default function Contracts({ customers, contracts, customerFilter, onFilt
       {pricingNotice && <div role="status" className="alert warning">{pricingNotice}</div>}
       <div className="section-title"><h3>{pricingBasis === 'PER_KG' ? '重量級距運價' : '數量級距運價'} · {freightBasisLabels[pricingBasis]}</h3><button type="button" className="btn-secondary" onClick={() => patch('breaks', [...form.breaks, { weight: '', rate: '' }])}>＋ 自訂級距</button></div>
       <p className="muted">選用不超過計費數量的最高級距，單一運價 × 全部計費數量。未達任何級距時使用基本單價；未填價格的級距不儲存。{pricingBasis === 'PER_KG' ? ' 不使用 Weight Break Optimization。' : ''}</p>
+      {pricingBasis === 'PER_KG' && <p className="muted">45 KG 以下的小重量單價可在 Normal 列設定。最低已填級距為 +45 時，未滿 45 KG 使用 Normal，45 KG 起（含）依已填級距選價。以進位後的計費重量判定；未填任何級距時，Normal 適用全部重量。</p>}
       <div className="rate-special">
         <Field label="MIN 最低總收費（固定金額）"><input inputMode="decimal" placeholder="未設定" value={form.minimumCharge} onChange={event => patch('minimumCharge', event.target.value)} /></Field>
-        <Field label={`基本單價 Normal Rate · ${form.currency}/${unit}`}><input inputMode="decimal" placeholder="請填實際合約單價" value={form.normalRate} onChange={event => patch('normalRate', event.target.value)} /></Field>
+        {pricingBasis !== 'PER_KG' && <Field label={`基本單價 Normal Rate · ${form.currency}/${unit}`}><input inputMode="decimal" placeholder="請填實際合約單價" value={form.normalRate} onChange={event => patch('normalRate', event.target.value)} /></Field>}
       </div>
-      <div className="table-wrap"><table className="input-table"><thead><tr><th>數量下限 {unit}（含）</th><th>單價 {form.currency}/{unit}</th><th>操作</th></tr></thead><tbody>{form.breaks.map((tier, index) => <tr key={index}>
+      <div className="table-wrap"><table className="input-table"><thead><tr><th>{pricingBasis === 'PER_KG' ? '重量區間 / 數量下限 KG（含）' : `數量下限 ${unit}（含）`}</th><th>單價 {form.currency}/{unit}</th><th>操作</th></tr></thead><tbody>
+        {pricingBasis === 'PER_KG' && <tr>
+          <td><strong>{normalAirRange(form.breaks)}</strong><small>Normal · 未達首個已填級距</small></td>
+          <td><input aria-label="空運 Normal 單價" inputMode="decimal" placeholder="未滿 45 KG 單價" value={form.normalRate} onChange={event => patch('normalRate', event.target.value)} /></td>
+          <td><span className="muted">一般單價</span></td>
+        </tr>}
+        {form.breaks.map((tier, index) => <tr key={index}>
         <td><input aria-label={`級距數量 ${index + 1}`} required={tier.rate.trim() !== ''} inputMode={pricingBasis === 'PER_CONTAINER' ? 'numeric' : 'decimal'} value={tier.weight} onChange={event => patch('breaks', form.breaks.map((current, currentIndex) => currentIndex === index ? { ...current, weight: event.target.value } : current))} /></td>
         <td><input aria-label={`級距價格 ${index + 1}`} inputMode="decimal" value={tier.rate} onChange={event => patch('breaks', form.breaks.map((current, currentIndex) => currentIndex === index ? { ...current, rate: event.target.value } : current))} /></td>
         <td><button type="button" className="text-danger" onClick={() => patch('breaks', form.breaks.filter((_, currentIndex) => currentIndex !== index))}>移除</button></td>
@@ -200,7 +218,7 @@ export default function Contracts({ customers, contracts, customerFilter, onFilt
       {view.version.transportMode === 'SEA' && <p>{view.version.seaShipmentType} {view.version.containerType} · {freightBasisLabels[basisOf(view.version)]}</p>}
       {view.version.routeScope === 'COUNTRY' && (view.version.origin || view.version.destination) && <p className="muted">地點備註：{view.version.origin || '未填'} → {view.version.destination || '未填'}（不限制國家運價）</p>}
       <p>Service: {view.version.serviceType || '不限'} / Commodity: {view.version.commodity || '不限'} / MIN: {view.version.minimumCharge ? `${view.version.currency} ${money(view.version.minimumCharge)}` : '—'} / 基本單價: {view.version.normalRate ? `${view.version.currency} ${money(view.version.normalRate)}/${freightUnits[basisOf(view.version)]}` : '—'}</p>
-      <div className="table-wrap"><table><thead><tr><th>數量下限 {freightUnits[basisOf(view.version)]}（含）</th><th>單價 {view.version.currency}/{freightUnits[basisOf(view.version)]}</th></tr></thead><tbody>{view.version.breaks.map(tier => <tr key={tier.weight}><td>+{tier.weight} {freightUnits[basisOf(view.version)]}</td><td>{money(tier.rate)}</td></tr>)}</tbody></table>
+      <div className="table-wrap"><table><thead><tr><th>{basisOf(view.version) === 'PER_KG' ? '重量區間 / 數量下限 KG（含）' : `數量下限 ${freightUnits[basisOf(view.version)]}（含）`}</th><th>單價 {view.version.currency}/{freightUnits[basisOf(view.version)]}</th></tr></thead><tbody>{basisOf(view.version) === 'PER_KG' && <tr><td>{normalAirRange(view.version.breaks)} · Normal</td><td>{view.version.normalRate === '' ? '未設定' : money(view.version.normalRate)}</td></tr>}{view.version.breaks.map(tier => <tr key={tier.weight}><td>+{tier.weight} {freightUnits[basisOf(view.version)]}</td><td>{money(tier.rate)}</td></tr>)}</tbody></table>
         <table><thead><tr><th>附加費</th><th>計價</th><th>運價</th><th>已包含</th></tr></thead><tbody>{view.version.charges.map((charge, index) => <tr key={index}><td>{charge.name}</td><td>{chargeBasisLabels[charge.basis]}</td><td>{charge.currency} {charge.rate}{charge.basis === 'MANUAL' ? ` / 手動 ${charge.manualAmount || '未填'}` : ''}{charge.minimumAmount ? ` / 最低 ${charge.minimumAmount}` : ''}</td><td>{charge.included ? '是' : '否'}</td></tr>)}</tbody></table>
       </div><p className="muted">{view.version.remarks || '無合約備註'}</p>
     </div>}
