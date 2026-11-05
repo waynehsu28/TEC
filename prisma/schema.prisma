@@ -1,0 +1,186 @@
+generator client {
+  provider = "prisma-client-js"
+  engineType = "client"
+}
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+model Customer {
+  id              String @id @default(cuid())
+  name            String
+  code            String @unique
+  contact         String @default("")
+  email           String @default("")
+  phone           String @default("")
+  defaultCurrency String
+  remarks         String @default("")
+  status          String @default("ACTIVE")
+  contracts       Contract[]
+  quotes          Quote[]
+  createdAt       DateTime @default(now())
+  @@index([status, name])
+  @@map("Customers")
+}
+model Contract {
+  id         String @id @default(cuid())
+  customerId String
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  number     String
+  routeKey   String
+  status     String @default("ACTIVE")
+  versions   ContractVersion[]
+  createdAt  DateTime @default(now())
+  @@unique([customerId, number, routeKey])
+  @@index([customerId, status])
+  @@map("Contracts")
+}
+model ContractVersion {
+  id            String @id @default(cuid())
+  contractId    String
+  contract      Contract @relation(fields: [contractId], references: [id], onDelete: Restrict)
+  version       Int
+  origin        String
+  destination   String
+  airline       String @default("")
+  serviceType   String @default("")
+  commodity     String @default("")
+  effectiveDate String
+  expiryDate    String
+  currency      String
+  rateType      String
+  minimumCharge String @default("")
+  normalRate    String @default("")
+  remarks       String @default("")
+  breaks        ContractRateBreak[]
+  charges       ContractCharge[]
+  quotes        Quote[]
+  createdAt     DateTime @default(now())
+  @@unique([contractId, version])
+  @@index([origin, destination, effectiveDate, expiryDate])
+  @@map("ContractVersions")
+}
+model ContractRateBreak {
+  id        String @id @default(cuid())
+  versionId String
+  version   ContractVersion @relation(fields: [versionId], references: [id], onDelete: Restrict)
+  weight    String
+  rate      String
+  @@unique([versionId, weight])
+  @@map("ContractRateBreaks")
+}
+model ContractCharge {
+  id            String @id @default(cuid())
+  versionId     String
+  version       ContractVersion @relation(fields: [versionId], references: [id], onDelete: Restrict)
+  name          String
+  basis         String
+  rate          String
+  currency      String
+  included      Boolean @default(false)
+  minimumAmount String @default("")
+  manualAmount  String @default("")
+  @@index([versionId])
+  @@map("ContractCharges")
+}
+model Quote {
+  id                String @id @default(cuid())
+  number            String @unique
+  revision          Int @default(1)
+  rootId            String?
+  root              Quote? @relation("QuoteRoot", fields: [rootId], references: [id], onDelete: Restrict)
+  children          Quote[] @relation("QuoteRoot")
+  customerId        String
+  customer          Customer @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  contractVersionId String?
+  contractVersion   ContractVersion? @relation(fields: [contractVersionId], references: [id], onDelete: Restrict)
+  status            String
+  snapshot          String
+  cargo             QuoteCargoItem[]
+  charges           QuoteCharge[]
+  costs             QuoteCostItem[]
+  revisions         QuoteRevision[] @relation("NewRevision")
+  revisedBy         QuoteRevision[] @relation("OldRevision")
+  exchangeRates     ExchangeRate[]
+  createdAt         DateTime @default(now())
+  @@index([customerId, createdAt])
+  @@index([rootId, revision])
+  @@index([status, createdAt])
+  @@map("Quotes")
+}
+model QuoteCargoItem {
+  id          String @id @default(cuid())
+  quoteId     String
+  quote       Quote @relation(fields: [quoteId], references: [id], onDelete: Restrict)
+  pieces      Int
+  length      String
+  width       String
+  height      String
+  grossWeight String
+  weightMode  String
+  @@index([quoteId])
+  @@map("QuoteCargoItems")
+}
+model QuoteCharge {
+  id             String @id @default(cuid())
+  quoteId        String
+  quote          Quote @relation(fields: [quoteId], references: [id], onDelete: Restrict)
+  name           String
+  basis          String
+  currency       String
+  included       Boolean
+  originalRate   String
+  appliedRate    String
+  originalAmount String
+  amount         String
+  temporary      Boolean
+  @@index([quoteId])
+  @@map("QuoteCharges")
+}
+model QuoteCostItem {
+  id       String @id @default(cuid())
+  quoteId  String
+  quote    Quote @relation(fields: [quoteId], references: [id], onDelete: Restrict)
+  name     String
+  amount   String?
+  currency String
+  status   String
+  @@index([quoteId])
+  @@map("QuoteCostItems")
+}
+model QuoteRevision {
+  id              String @id @default(cuid())
+  quoteId         String
+  quote           Quote @relation("NewRevision", fields: [quoteId], references: [id], onDelete: Restrict)
+  previousQuoteId String
+  previousQuote   Quote @relation("OldRevision", fields: [previousQuoteId], references: [id], onDelete: Restrict)
+  revision        Int
+  createdAt       DateTime @default(now())
+  @@unique([quoteId, revision])
+  @@map("QuoteRevisions")
+}
+model Settings {
+  id               Int @id @default(1)
+  companyName      String @default("")
+  companyLogo      String @default("")
+  volumeDivisor    String @default("6000")
+  weightIncrement  String @default("0.5")
+  defaultCurrency  String @default("USD")
+  exchangeRate     String @default("")
+  exchangeRateDate String @default("")
+  terms            String @default("")
+}
+model ExchangeRate {
+  id        String @id @default(cuid())
+  quoteId   String?
+  quote     Quote? @relation(fields: [quoteId], references: [id], onDelete: Restrict)
+  usdToTwd  String
+  rateDate  String
+  createdAt DateTime @default(now())
+  @@index([quoteId, rateDate])
+  @@map("ExchangeRates")
+}
+model QuoteCounter {
+  date     String @id
+  sequence Int @default(0)
+}

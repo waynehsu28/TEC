@@ -1,0 +1,39 @@
+{
+  "name": "air-freight-quotation",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev --webpack --hostname 127.0.0.1",
+    "build": "prisma generate && next build --webpack",
+    "start": "next start --hostname 127.0.0.1",
+    "db:generate": "prisma generate",
+    "db:migrate": "prisma migrate deploy",
+    "db:setup": "prisma generate && prisma migrate deploy",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "next typegen && tsc --noEmit",
+    "postinstall": "prisma generate"
+  },
+  "dependencies": {
+    "@prisma/adapter-libsql": "6.19.0",
+    "@prisma/client": "6.19.0",
+    "decimal.js": "^10.6.0",
+    "dotenv": "18.0.9",
+    "next": "^16.0.0",
+    "pdfkit": "^0.17.2",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "zod": "^4.1.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4.1.0",
+    "@types/node": "^24.0.0",
+    "@types/pdfkit": "^0.17.3",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "prisma": "6.19.0",
+    "tailwindcss": "^4.1.0",
+    "typescript": "^5.9.0",
+    "vitest": "^3.2.0"
+  }
+}
