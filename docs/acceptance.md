@@ -155,6 +155,25 @@ Chromium 透過本機模擬 Codespaces HTTPS 代理操作 production server，�
 
 瀏覽器無 JavaScript 錯誤，API 保存的是 Normal 與正數 +45 門檻，未新增零或負級距。以上使用虛構測試價格，未將 Demo 資料寫入正式工作資料庫；本次沒有直接測試真正的 GitHub Codespace。
 
+## Trucking Charge 重量級距驗證（2026-11-05）
+
+合約及臨時附加費新增「重量級距 Per KG」計價，獨立維護 Normal、+45／+100／+300／+500／+1000 與自訂級距。新增 migration `20261105000300_tiered_charge_rates` 保存附加費級距及套價資訊；舊級距、一般附加費與報價 snapshot 原始字串保留。
+
+完整回歸結果為 **169 passed、0 failed、0 skipped**，共 17 個測試檔；型別檢查與 production build 通過。新增／擴充測試涵蓋獨立級距、MIN、零價格、未達較高門檻不偷套低價、海運實重、已含 FCL 無貨物、單次調價、版本及資料庫升級、表單切換、草稿恢復與客戶 PDF 欄位隔離。
+
+Chromium 透過本機模擬 Codespaces HTTPS 代理操作 production server，使用獨立暫存 SQLite 及虛構 Demo 價格：Trucking Normal USD 2/KG、+45 USD 1.5/KG、+100 USD 1/KG、最低 USD 10。
+
+| 實重 | 計費重 | Trucking 級距 | Trucking 金額 |
+| --- | --- | --- | --- |
+| 44.5 KG | 44.5 KG | Normal | USD 89.00 |
+| 45 KG | 45 KG | +45 KG | USD 67.50 |
+| 44.6 KG | 45 KG | +45 KG | USD 67.50 |
+| 100 KG | 100 KG | +100 KG | USD 100.00 |
+
+畫面中的本次單價同步選價；100 KG 本次覆寫為 USD 0.9/KG 後，保留原額 USD 100，套用額 USD 90。另一項已含 Trucking 為零；臨時級距費用在重載草稿後仍可試算 USD 20，含基本運費後總應收 USD 690，保存時排除未填單價級距。新增合約版本後，舊報價快照保持相同，瀏覽器無 JavaScript 錯誤。
+
+PDF 在模擬代理下實際回應 200／有效 PDF，另以本機 HTTP 的真實 Chromium 下載驗證。`pdftotext` 確認 +100 KG、100 KG、USD 0.9/KG、USD 90 及總額 USD 690，沒有內部成本／毛利；`pdfinfo` 確認一頁。沒有將 Demo 寫入正式工作資料庫；本次未直接測試真正 GitHub Codespace 的平台下載行為。
+
 ## 第一版未納入
 
 正式身分驗證與存取控制、外網部署、客戶入口、航空公司即時 API、自動成本與匯率來源、Weight Break Optimization、批次 Excel 匯入匯出、多使用者協作、會計入帳與稅額計算。不提供未接資料庫的假操作按鈕，也不自動建立真實客戶或運價。

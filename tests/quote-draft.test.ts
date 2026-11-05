@@ -12,6 +12,25 @@ describe('quotation draft recovery', () => {
     expect(writeQuoteDraft(storage, input)).toBe(true);
     expect(readQuoteDraft(storage, null)).toEqual(input);
   });
+  it('retains incomplete trucking weight tiers and a selected-rate adjustment after reload', () => {
+    const storage = memoryStorage();
+    const input = quoteInput({
+      chargeOverrides: [{ chargeId: 'trucking', rate: '0.8' }],
+      temporaryCharges: [{ name: 'Trucking Charge', basis: 'PER_KG_TIERED', rate: '', minimumAmount: '50', currency: 'USD', included: false,
+        breaks: [{ weight: '45', rate: '1.25' }, { weight: '100.', rate: '' }, { weight: '', rate: '0' }] }],
+    });
+    expect(writeQuoteDraft(storage, input)).toBe(true);
+    expect(readQuoteDraft(storage, null)).toEqual(input);
+  });
+  it('rejects malformed or oversized trucking tier storage before restoring the form', () => {
+    const storage = memoryStorage();
+    const charge = { name: 'Trucking Charge', basis: 'PER_KG_TIERED' as const, rate: '2', currency: 'USD' as const, included: false };
+    for (const breaks of [null, [{ weight: 45, rate: '1' }], [{ weight: '45', rate: null }], Array.from({ length: 51 }, () => ({ weight: '45', rate: '1' }))]) {
+      const input = quoteInput({ temporaryCharges: [{ ...charge, breaks: breaks as never }] });
+      storage.setItem(quoteDraftKey(null), JSON.stringify({ version: 1, input }));
+      expect(readQuoteDraft(storage, null)).toBeNull();
+    }
+  });
   it('separates new quotations from different revision contexts', () => {
     const storage = memoryStorage();
     const first = quoteInput(); const second = quoteInput({ revisionOfId: 'old-quote', remarks: 'revision only' });

@@ -39,7 +39,10 @@ export function customerPdfData(snapshot: QuoteSnapshot) {
       appliedBreak: snapshot.freight.appliedBreak, rate: snapshot.freight.rate,
       minimumApplied: snapshot.freight.minimumApplied },
     charges: snapshot.charges.map(charge => ({ name: charge.name, basis: charge.basis,
-      currency: charge.currency, amount: charge.included ? '0.00' : charge.amount, included: charge.included })),
+      currency: charge.currency, amount: charge.included ? '0.00' : charge.amount, included: charge.included,
+      ...(charge.basis === 'PER_KG_TIERED' ? { rate: charge.appliedRate, appliedBreak: charge.appliedBreak,
+        quantity: charge.quantity, minimumApplied: charge.minimumApplied } : {}),
+    })),
     totals: Object.entries(totals).map(([currency, amount]) => ({ currency, amount: amount!.toFixed(2) })),
     validity: snapshot.input.validity, remarks: snapshot.input.remarks, terms: snapshot.input.terms,
   };
@@ -148,8 +151,13 @@ export async function generateQuotePdf(quote: QuoteRecord): Promise<Buffer> {
       row(['費用項目', '計費方式', '幣別', '金額'], chargeColumns, true);
       row([isSea ? '海運運費 Sea Freight' : '航空運費 Air Freight', freightDescription(),
         data.freight.currency, money(data.freight.amount)], chargeColumns);
-      for (const charge of data.charges) row([charge.name, charge.included ? '已包含 Included' : basisNames[charge.basis], charge.currency,
-        charge.included ? '已包含' : money(charge.amount)], chargeColumns);
+      for (const charge of data.charges) {
+        const description = charge.included ? '已包含 Included' : charge.basis === 'PER_KG_TIERED'
+          ? [basisNames[charge.basis], charge.appliedBreak, charge.quantity === undefined ? '' : `${charge.quantity} KG`,
+            charge.rate ? `${charge.currency} ${charge.rate} / KG` : '', charge.minimumApplied ? '已套用最低收費' : ''].filter(Boolean).join('\n')
+          : basisNames[charge.basis];
+        row([charge.name, description, charge.currency, charge.included ? '已包含' : money(charge.amount)], chargeColumns);
+      }
       doc.moveDown(0.6);
       for (const total of data.totals) text(`應付總額 Total Selling Price：${total.currency} ${money(total.amount)}`, 13);
       if (data.totals.length > 1) text('不同幣別分別列示，以上總額未進行幣別合併。', 9);

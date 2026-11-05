@@ -106,6 +106,18 @@ describe('正式客戶 PDF 與資訊隔離', () => {
     for (const forbidden of ['contract', 'costs', 'finance', 'settings', 'originalRate', 'originalAmount', 'INTERNAL_COST_SECRET', 'CUSTOMER_INTERNAL_SECRET']) expect(serialized).not.toContain(forbidden);
   });
 
+  it('projects only the selected selling rate and weight-tier metadata for trucking', () => {
+    const quote = quoteFixture();
+    quote.snapshot.charges = [{ name: 'Trucking Charge', basis: 'PER_KG_TIERED', currency: 'USD', included: false,
+      originalRate: '123456.789', appliedRate: '0', originalAmount: '555555.55', amount: '50.00', temporary: false,
+      appliedBreak: 'Normal', quantity: '44.5', minimumApplied: true }];
+    const data = customerPdfData(quote.snapshot);
+    expect(data.charges).toEqual([{ name: 'Trucking Charge', basis: 'PER_KG_TIERED', currency: 'USD', included: false,
+      amount: '50.00', rate: '0', appliedBreak: 'Normal', quantity: '44.5', minimumApplied: true }]);
+    expect(data.totals).toEqual([{ currency: 'USD', amount: '1856.00' }]);
+    for (const forbidden of ['originalRate', 'originalAmount', '123456.789', '555555.55', 'contract', 'finance', 'INTERNAL_COST_SECRET']) expect(JSON.stringify(data)).not.toContain(forbidden);
+  });
+
   it('renders an actual downloadable PDF without relying on platform fonts or an external API', async () => {
     const buffer = await generateQuotePdf(quoteFixture());
     expect(buffer.subarray(0, 5).toString()).toBe('%PDF-');
@@ -137,6 +149,24 @@ describe('正式客戶 PDF 與資訊隔離', () => {
   it.skipIf(!extractionAvailable)('prints a country-wide AIR price per KG with optional city details and explicit included fees', async () => {
     const content = await quoteText(countryQuoteFixture('AIR'));
     for (const expected of ['航空貨運報價單AirFreightQuotation', '台灣', '美國（全國適用）', '起運地點：高雄', '目的地點：紐約', '420KG', 'USD4.30/KG', '計費重量ChargeableWeight', '目的地派送費', '已包含', '目的地文件費', '每公斤PerKG']) expect(content).toContain(expected);
+    expectNoInternalData(content);
+  });
+
+  it.skipIf(!extractionAvailable)('prints trucking tier quantities, selected prices and minimums from the saved snapshot', async () => {
+    const quote = countryQuoteFixture('AIR');
+    quote.snapshot.charges = [
+      { name: 'Trucking Charge', basis: 'PER_KG_TIERED', currency: 'USD', included: false, originalRate: '123456.789', appliedRate: '1.25',
+        originalAmount: '555555.55', amount: '60.00', temporary: false, appliedBreak: '+45 KG', quantity: '45', minimumApplied: true },
+      { name: 'Trucking Normal', basis: 'PER_KG_TIERED', currency: 'TWD', included: false, originalRate: '3.5', appliedRate: '3.5',
+        originalAmount: '155.75', amount: '155.75', temporary: true, appliedBreak: 'Normal', quantity: '44.5', minimumApplied: false },
+      { name: 'Included Trucking', basis: 'PER_KG_TIERED', currency: 'USD', included: true, originalRate: '', appliedRate: '',
+        originalAmount: '0.00', amount: '0.00', temporary: false },
+    ];
+    const original = JSON.stringify(quote.snapshot);
+    const content = await quoteText(quote);
+    for (const expected of ['TruckingCharge', '+45KG', '45KG', 'USD1.25/KG', '60.00', '已套用最低收費', 'TruckingNormal', 'Normal', '44.5KG', 'TWD3.5/KG', '155.75', 'IncludedTrucking', '已包含']) expect(content).toContain(expected);
+    for (const forbidden of ['123456.789', '555555.55', 'undefined', 'null']) expect(content).not.toContain(forbidden);
+    expect(JSON.stringify(quote.snapshot)).toBe(original);
     expectNoInternalData(content);
   });
 

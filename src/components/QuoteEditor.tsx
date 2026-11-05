@@ -1,8 +1,10 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import type { CargoItem, ChargeBasis, ChargeInput, ContractCandidate, CostInput, Currency, Customer, QuoteInput, QuoteRecord, QuoteSnapshot, RouteScope, SeaShipmentType, Settings, TransportMode } from '@/lib/types';
-import { calculateWeights } from '@/lib/engine';
+import { calculateWeights, resolveTieredChargeRate } from '@/lib/engine';
+import { chargeBasisPatch, pricedCharge } from '@/lib/charge-rates';
+import ChargeWeightRates from './ChargeWeightRates';
 import { COUNTRIES } from '@/lib/countries';
 import { chargeBasisLabels, freightBasisLabels, modeName, routeLabel } from '@/lib/transport';
 import { readQuoteDraft, writeQuoteDraft, clearSavedQuoteDraft, quoteDraftStorage } from '@/lib/quote-draft';
@@ -93,13 +95,18 @@ export default function QuoteEditor({ customers, settings, initial, onSaved }: {
   }, [matchKey, retry]);
   const selected = candidates.find(c => c.id === form.contractVersionId);
   const weights = useMemo(() => { try { return calculateWeights(form.cargo, settings, form.transportMode ?? 'AIR'); } catch { return null; } }, [form.cargo, settings, form.transportMode]);
+  function tieredSelection(charge: ChargeInput) {
+    if (charge.basis !== 'PER_KG_TIERED' || !weights) return null;
+    try { return resolveTieredChargeRate(charge, weights, { transportMode: form.transportMode, seaShipmentType: form.seaShipmentType, containerCount: form.containerCount }); }
+    catch { return null; }
+  }
   function cargoChange(index: number, patch: Partial<CargoItem>) { change('cargo', form.cargo.map((row,i) => i === index ? { ...row, ...patch } : row)); }
   function costChange(index: number, patch: Partial<CostInput>) { change('costs', form.costs.map((row,i) => i === index ? { ...row, ...patch } : row)); }
   function chargeChange(index: number, patch: Partial<ChargeInput>) { change('temporaryCharges', form.temporaryCharges.map((row,i) => i === index ? { ...row, ...patch } : row)); }
   function override(id: string, patch: {rate?:string; manualAmount?:string}) {
     const original = selected?.charges.find(c => c.id === id);
     const old = form.chargeOverrides.find(c => c.chargeId === id);
-    change('chargeOverrides', [...form.chargeOverrides.filter(c => c.chargeId !== id), { chargeId: id, rate: old?.rate ?? original?.rate ?? '', manualAmount: old?.manualAmount ?? original?.manualAmount, ...patch }]);
+    change('chargeOverrides', [...form.chargeOverrides.filter(c => c.chargeId !== id), { chargeId: id, rate: old?.rate ?? (original?.basis === 'PER_KG_TIERED' ? tieredSelection(original)?.rate : original?.rate) ?? '', manualAmount: old?.manualAmount ?? original?.manualAmount, ...patch }]);
   }
   const cargoReady = weights !== null && (isFcl || form.cargo.length > 0);
   const containerReady = !isFcl || Number.isInteger(form.containerCount) && (form.containerCount ?? 0) > 0;
@@ -107,7 +114,7 @@ export default function QuoteEditor({ customers, settings, initial, onSaved }: {
   async function preview() {
     setBusy('preview'); setError(''); const current = revision.current;
     try {
-      const data = await post<QuoteSnapshot>('/api/preview', form);
+      const data = await post<QuoteSnapshot>('/api/preview', { ...form, temporaryCharges: form.temporaryCharges.map(pricedCharge) });
       if (mounted.current && revision.current === current) setSnapshot(data);
     } catch (err) {
       if (mounted.current && revision.current === current) setError(err instanceof Error ? err.message : '試算失敗');
@@ -119,7 +126,7 @@ export default function QuoteEditor({ customers, settings, initial, onSaved }: {
     const submitted = form;
     setBusy('save'); setError('');
     try {
-      const record = await post<QuoteRecord>('/api/quotes', submitted);
+      const record = await post<QuoteRecord>('/api/quotes', { ...submitted, temporaryCharges: submitted.temporaryCharges.map(pricedCharge) });
       clearSavedQuoteDraft(quoteDraftStorage(), submitted);
       if (mounted.current) { setSavedNumber(`${record.number} · R${record.revision}`); setSnapshot(record.snapshot); }
       try { onSaved(record); }
@@ -190,10 +197,31 @@ export default function QuoteEditor({ customers, settings, initial, onSaved }: {
       </div></>}
       {matchState==='ready' && candidates.length>0 && <><p className="muted">找到 {candidates.length} 份有效合約。承運人專屬合約優先；多份候選須由使用者確認。</p><div className="table-wrap"><table><thead><tr><th>選用</th><th>合約 / 版本</th><th>運輸 / 航線</th><th>承運人 / 服務 / 貨物</th><th>有效期間</th><th>費率類型 / 單位</th></tr></thead><tbody>{candidates.map(c=><tr key={c.id}><td><input aria-label={`選用 ${c.number} v${c.version}`} type="radio" name="contract" checked={form.contractVersionId===c.id} onChange={()=>update({contractVersionId:c.id,chargeOverrides:[],manualFreight:null})}/></td><td>{c.number} · v{c.version}</td><td>{modeName(c.transportMode)}{c.transportMode==='SEA' && ` · ${c.seaShipmentType}${c.containerType ? ` · ${c.containerType}` : ''}`}<br/>{routeLabel(c)}</td><td>{c.airline||'不限'} / {c.serviceType||'不限'} / {c.commodity||'不限'}</td><td>{c.effectiveDate} ～ {c.expiryDate}</td><td>{c.rateType==='ALL_IN'?'All-in':'Base + Surcharges'} · {c.currency}<br/>{freightBasisLabels[c.pricingBasis ?? (c.transportMode==='SEA' ? c.seaShipmentType==='FCL' ? 'PER_CONTAINER' : 'PER_CBM' : 'PER_KG')]}</td></tr>)}</tbody></table></div></>}
       {selected && <><p>計價單位：{freightBasisLabels[selected.pricingBasis ?? (isSea ? isFcl ? 'PER_CONTAINER' : 'PER_CBM' : 'PER_KG')]} · 最低運費 {selected.minimumCharge||'未設定'} {selected.currency} · 一般單價 {selected.normalRate||'未設定'} {selected.currency} · 數量級距 {selected.breaks.map(b=>`+${b.weight}: ${b.rate}`).join(' / ')||'未設定'}</p>
-      {selected.charges.length>0 && <div className="table-wrap"><table><thead><tr><th>合約費用</th><th>計價方式</th><th>幣別</th><th>原合約價格</th><th>本次套用價格</th><th>原手動金額 / 本次金額</th><th>包含於運價</th></tr></thead><tbody>{selected.charges.map((charge,i)=>{const adjustment=form.chargeOverrides.find(o=>o.chargeId===charge.id);return <tr key={charge.id??i}><td>{charge.name}</td><td>{basisLabels[charge.basis]}</td><td>{charge.currency}</td><td>{charge.rate}</td><td><input aria-label={`調整 ${charge.name} 單價`} disabled={charge.included||!charge.id} type="number" min="0" step="any" value={adjustment?.rate??charge.rate} onChange={e=>charge.id&&override(charge.id,{rate:e.target.value})}/></td><td>{charge.basis==='MANUAL'?<><small>原：{charge.manualAmount||'未設定'}</small><input aria-label={`${charge.name} 本次手動金額`} disabled={charge.included||!charge.id} type="number" min="0" step="any" value={adjustment?.manualAmount??charge.manualAmount??''} onChange={e=>charge.id&&override(charge.id,{manualAmount:e.target.value})}/></>:'—'}</td><td>{charge.included?'已包含，不重複計收':'另計'}</td></tr>;})}</tbody></table></div>}</>}
+      {selected.charges.length>0 && <div className="table-wrap"><table><thead><tr><th>合約費用</th><th>計價方式</th><th>幣別</th><th>原合約價格</th><th>本次套用價格</th><th>原手動金額 / 本次金額</th><th>包含於運價</th></tr></thead><tbody>{selected.charges.map((charge,i)=>{
+        const adjustment = form.chargeOverrides.find(o=>o.chargeId===charge.id);
+        const tiered = charge.basis === 'PER_KG_TIERED';
+        const selection = tieredSelection(charge);
+        const rate = tiered ? selection?.rate ?? '' : charge.rate;
+        return <Fragment key={charge.id??i}><tr>
+          <td>{charge.name}</td><td>{basisLabels[charge.basis]}</td><td>{charge.currency}</td>
+          <td>{rate === '' ? '—' : rate}{tiered && <small>{selection ? `${selection.appliedBreak}${selection.quantity ? ` · ${curr(selection.quantity)} KG` : ''}` : '請先填寫完整重量資料'}{charge.minimumAmount ? ` · 最低 ${charge.minimumAmount}` : ''}</small>}</td>
+          <td><input aria-label={`調整 ${charge.name} 單價`} disabled={charge.included||!charge.id||(tiered&&!selection)} type="number" min="0" step="any" value={adjustment?.rate??rate} onChange={e=>charge.id&&override(charge.id,{rate:e.target.value})}/>{tiered && adjustment && <button type="button" className="btn-secondary" onClick={()=>change('chargeOverrides',form.chargeOverrides.filter(row=>row.chargeId!==charge.id))}>還原合約級距價</button>}</td>
+          <td>{charge.basis==='MANUAL'?<><small>原：{charge.manualAmount||'未設定'}</small><input aria-label={`${charge.name} 本次手動金額`} disabled={charge.included||!charge.id} type="number" min="0" step="any" value={adjustment?.manualAmount??charge.manualAmount??''} onChange={e=>charge.id&&override(charge.id,{manualAmount:e.target.value})}/></>:'—'}</td>
+          <td>{charge.included?'已包含，不重複計收':'另計'}</td>
+        </tr>{tiered && <tr><td colSpan={7}><ChargeWeightRates label={charge.name} currency={charge.currency} rate={charge.rate} breaks={charge.breaks??[]} /></td></tr>}</Fragment>;
+      })}</tbody></table></div>}</>}
       <h4>臨時應收費用</h4>
       {isSea && <p className="muted">海運每公斤附加費使用實際總重；每 CBM 使用實際體積；每櫃僅適用整櫃 FCL。合約標記「已包含」的費用不會重複計收。</p>}
-      {form.temporaryCharges.length>0 && <div className="table-wrap"><table><thead><tr><th>費用名稱</th><th>方式</th><th>單價 / 固定額</th><th>手動金額</th><th>最低收費</th><th>幣別</th><th></th></tr></thead><tbody>{form.temporaryCharges.map((charge,i)=><tr key={i}><td><input aria-label="臨時費用名稱" value={charge.name} onChange={e=>chargeChange(i,{name:e.target.value})}/></td><td><select aria-label={`臨時費用 ${i+1} 計價方式`} value={charge.basis} onChange={e=>chargeChange(i,{basis:e.target.value as ChargeBasis})}>{Object.entries(basisLabels).filter(([value])=>value!=='PER_CONTAINER'||isFcl).map(([value,label])=><option key={value} value={value}>{label}</option>)}</select></td><td><input aria-label="臨時費用單價" type="number" min="0" step="any" value={charge.rate} onChange={e=>chargeChange(i,{rate:e.target.value})}/></td><td><input aria-label="臨時費用手動金額" disabled={charge.basis!=='MANUAL'} type="number" min="0" step="any" value={charge.manualAmount??''} onChange={e=>chargeChange(i,{manualAmount:e.target.value})}/></td><td><input aria-label="臨時費用最低收費" type="number" min="0" step="any" value={charge.minimumAmount??''} onChange={e=>chargeChange(i,{minimumAmount:e.target.value})}/></td><td><select value={charge.currency} onChange={e=>chargeChange(i,{currency:e.target.value as Currency})}><option>USD</option><option>TWD</option></select></td><td><button type="button" className="btn btn-secondary" onClick={()=>change('temporaryCharges',form.temporaryCharges.filter((_,n)=>n!==i))}>移除</button></td></tr>)}</tbody></table></div>}
+      <p className="muted">Trucking Charge 可選「重量級距 Per KG」，設定本次 Normal 與 +45、+100 等單價。空運使用計費重量，海運使用實際總重。</p>
+      {form.temporaryCharges.length>0 && <div className="table-wrap"><table><thead><tr><th>費用名稱</th><th>方式</th><th>單價 / 固定額</th><th>手動金額</th><th>最低收費</th><th>幣別</th><th></th></tr></thead><tbody>{form.temporaryCharges.map((charge,i)=><Fragment key={i}><tr>
+        <td><input aria-label="臨時費用名稱" value={charge.name} onChange={e=>chargeChange(i,{name:e.target.value})}/></td>
+        <td><select aria-label={`臨時費用 ${i+1} 計價方式`} value={charge.basis} onChange={e=>chargeChange(i,chargeBasisPatch(charge,e.target.value as ChargeBasis))}>{Object.entries(basisLabels).filter(([value])=>value!=='PER_CONTAINER'||isFcl).map(([value,label])=><option key={value} value={value}>{label}</option>)}</select></td>
+        <td>{charge.basis==='PER_KG_TIERED'?<span className="muted">依下方級距表</span>:<input aria-label="臨時費用單價" type="number" min="0" step="any" value={charge.rate} onChange={e=>chargeChange(i,{rate:e.target.value})}/>}</td>
+        <td><input aria-label="臨時費用手動金額" disabled={charge.basis!=='MANUAL'} type="number" min="0" step="any" value={charge.manualAmount??''} onChange={e=>chargeChange(i,{manualAmount:e.target.value})}/></td>
+        <td><input aria-label="臨時費用最低收費" type="number" min="0" step="any" value={charge.minimumAmount??''} onChange={e=>chargeChange(i,{minimumAmount:e.target.value})}/></td>
+        <td><select aria-label={`臨時費用 ${i+1} 幣別`} value={charge.currency} onChange={e=>chargeChange(i,{currency:e.target.value as Currency})}><option>USD</option><option>TWD</option></select></td>
+        <td><button type="button" className="btn btn-secondary" onClick={()=>change('temporaryCharges',form.temporaryCharges.filter((_,n)=>n!==i))}>移除</button></td>
+      </tr>{charge.basis==='PER_KG_TIERED' && <tr><td colSpan={7}><ChargeWeightRates label={`臨時費用 ${i+1}`} currency={charge.currency} rate={charge.rate} breaks={charge.breaks??[]} onChange={changes=>chargeChange(i,changes)} /></td></tr>}</Fragment>)}</tbody></table></div>}
       <button type="button" className="btn btn-secondary" onClick={()=>change('temporaryCharges',[...form.temporaryCharges,{name:'',basis:'PER_SHIPMENT',rate:'',currency:form.analysisCurrency,included:false}])}>＋ 新增臨時應收費用</button>
     </section>
     <section className="panel">
@@ -208,7 +236,7 @@ export default function QuoteEditor({ customers, settings, initial, onSaved }: {
     <section className="panel"><h3 className="section-title">5. 報價條件</h3><div className="form-grid"><label className="field">本次報價條件 Terms and Conditions<textarea rows={4} value={form.terms} onChange={e=>change('terms',e.target.value)}/></label><label className="field">備註 Remarks<textarea rows={4} value={form.remarks} onChange={e=>change('remarks',e.target.value)}/></label></div><p className="muted">報價條件由使用者自行確認。儲存時保留本次輸入、合約版本、原價及調整價的完整快照。</p></section>
     <div style={{display:'flex',gap:12,alignItems:'center',margin:'20px 0'}}><button type="button" className="btn" disabled={!canCalculate||busy!==null} onClick={preview}>{busy==='preview'?'正在試算…':'試算報價'}</button><button type="button" className="btn" disabled={!snapshot||busy!==null||Boolean(savedNumber)} onClick={save}>{busy==='save'?'正在儲存…':'儲存報價快照'}</button>{!canCalculate&&<span className="muted">請完成運輸條件、{isFcl?'正整數貨櫃數量':'完整貨物資料'}及合約選擇或非合約售價。</span>}</div>
     {snapshot && <section className="panel"><h3 className="section-title">報價試算結果</h3><p>{modeName(snapshot.input.transportMode)} · {routeLabel(snapshot.input)}{snapshot.input.transportMode==='SEA' && ` · ${snapshot.input.seaShipmentType}${snapshot.input.containerType ? ` · ${snapshot.input.containerType}` : ''}`}</p><p>基本運費：<strong>{snapshot.freight.currency} {curr(snapshot.freight.amount)}</strong>{snapshot.freight.basis && ` · ${freightBasisLabels[snapshot.freight.basis]}`}{snapshot.freight.quantity !== undefined && ` · 計價數量 ${curr(snapshot.freight.quantity)} ${snapshot.freight.unit==='CONTAINER'?'櫃':snapshot.freight.unit ?? ''}`} · 適用級距 {snapshot.freight.appliedBreak}{snapshot.freight.minimumApplied?' · 已套用最低收費':''}</p>
-      {snapshot.charges.length>0&&<div className="table-wrap"><table><thead><tr><th>應收費用</th><th>原合約單價</th><th>本次單價</th><th>原始金額</th><th>本次金額</th><th>說明</th></tr></thead><tbody>{snapshot.charges.map((charge,i)=><tr key={i}><td>{charge.name}</td><td>{charge.currency} {curr(charge.originalRate)}</td><td>{charge.currency} {curr(charge.appliedRate)}</td><td>{charge.currency} {curr(charge.originalAmount)}</td><td>{charge.currency} {curr(charge.amount)}</td><td>{charge.included?'已包含':charge.temporary?'臨時費用':'合約附加費'}</td></tr>)}</tbody></table></div>}
+      {snapshot.charges.length>0&&<div className="table-wrap"><table><thead><tr><th>應收費用</th><th>原合約單價</th><th>本次單價</th><th>原始金額</th><th>本次金額</th><th>說明</th></tr></thead><tbody>{snapshot.charges.map((charge,i)=><tr key={i}><td>{charge.name}</td><td>{charge.currency} {curr(charge.originalRate || undefined)}</td><td>{charge.currency} {curr(charge.appliedRate || undefined)}</td><td>{charge.currency} {curr(charge.originalAmount)}</td><td>{charge.currency} {curr(charge.amount)}</td><td>{charge.included?'已包含':charge.temporary?'臨時費用':'合約附加費'}{charge.basis==='PER_KG_TIERED' && <small>{charge.appliedBreak}{charge.quantity ? ` · ${curr(charge.quantity)} KG` : ''}{charge.minimumApplied?' · 已套用最低收費':''}</small>}</td></tr>)}</tbody></table></div>}
       {snapshot.finance.costState==='MISSING'&&<div className="alert">Cost Not Available — 尚無成本資料，不計算毛利及毛利率。</div>}
       {snapshot.finance.costState==='PARTIAL'&&<div className="alert">成本資料不完整；僅顯示已知成本小計及暫估利潤。</div>}
       {snapshot.finance.provisional&&snapshot.finance.costState!=='MISSING'&&<p className="muted">此結果包含預估成本或未確認項目，屬暫估分析。</p>}

@@ -9,9 +9,10 @@ const currency = (value: unknown) => oneOf(value, ['USD', 'TWD']);
 const money = (value: unknown) => text(value, 64); // A draft may be incomplete; final validation remains server-side.
 const list = (value: unknown, max: number, valid: (item: unknown) => boolean) => Array.isArray(value) && value.length <= max && value.every(valid);
 function charge(value: unknown): boolean {
-  return record(value) && text(value.name, 120) && oneOf(value.basis, ['PER_KG', 'PER_CBM', 'PER_CONTAINER', 'PER_SHIPMENT', 'PER_PIECE', 'MINIMUM', 'MANUAL'])
+  return record(value) && text(value.name, 120) && oneOf(value.basis, ['PER_KG', 'PER_KG_TIERED', 'PER_CBM', 'PER_CONTAINER', 'PER_SHIPMENT', 'PER_PIECE', 'MINIMUM', 'MANUAL'])
     && money(value.rate) && currency(value.currency) && typeof value.included === 'boolean'
-    && (value.id === undefined || text(value.id, 100)) && (value.minimumAmount === undefined || money(value.minimumAmount)) && (value.manualAmount === undefined || money(value.manualAmount));
+    && (value.id === undefined || text(value.id, 100)) && (value.minimumAmount === undefined || money(value.minimumAmount)) && (value.manualAmount === undefined || money(value.manualAmount))
+    && (value.breaks === undefined || list(value.breaks, 50, tier => record(tier) && money(tier.weight) && money(tier.rate)));
 }
 /** Check shape, not business validity: partially entered numbers/dates must survive a reload. */
 export function isQuoteDraftInput(value: unknown): value is QuoteInput {

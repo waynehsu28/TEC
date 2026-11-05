@@ -9,7 +9,7 @@ export class ServiceError extends Error {
   constructor(message: string, public status = 400) { super(message); }
 }
 const contractInclude = {
-  versions: { orderBy: { version: 'desc' as const }, include: { breaks: true, charges: true } },
+  versions: { orderBy: { version: 'desc' as const }, include: { breaks: true, charges: { include: { breaks: true } } } },
 } satisfies Prisma.ContractInclude;
 type DbContract = Prisma.ContractGetPayload<{ include: typeof contractInclude }>;
 function asContract(row: DbContract): ContractRecord {
@@ -26,7 +26,8 @@ function asContract(row: DbContract): ContractRecord {
       breaks: v.breaks.map(b => ({ weight: b.weight, rate: b.rate })),
       charges: v.charges.map(c => ({ id: c.id, name: c.name, basis: c.basis as ContractVersion['charges'][number]['basis'],
         rate: c.rate, currency: c.currency as ContractVersion['currency'], included: c.included,
-        minimumAmount: c.minimumAmount, manualAmount: c.manualAmount })),
+        minimumAmount: c.minimumAmount, manualAmount: c.manualAmount,
+        ...(c.basis === 'PER_KG_TIERED' ? { breaks: [...c.breaks].sort((a, b) => new Decimal(a.weight).cmp(b.weight)).map(tier => ({ weight: tier.weight, rate: tier.rate })) } : {}) })),
     })),
   };
 }
@@ -52,7 +53,8 @@ function versionData(input: ContractInput, version: number) {
   return { ...fields, version,
     breaks: { create: breaks.map(b => ({ weight: b.weight, rate: b.rate })) },
     charges: { create: charges.map(c => ({ name: c.name, basis: c.basis, rate: c.rate, currency: c.currency, included: c.included,
-      minimumAmount: c.minimumAmount ?? '', manualAmount: c.manualAmount ?? '' })) },
+      minimumAmount: c.minimumAmount ?? '', manualAmount: c.manualAmount ?? '',
+      breaks: { create: (c.breaks ?? []).map(tier => ({ weight: tier.weight, rate: tier.rate })) } })) },
   };
 }
 function dateCode(now: Date) {

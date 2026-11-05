@@ -59,9 +59,19 @@ export const customerSchema = z.object({
 });
 export const chargeSchema = z.object({
   id: identifier.optional(), name: shortText.min(1, '請輸入費用名稱'),
-  basis: z.enum(['PER_KG', 'PER_SHIPMENT', 'PER_PIECE', 'PER_CBM', 'PER_CONTAINER', 'MINIMUM', 'MANUAL']),
-  rate: decimalSchema, currency: currencySchema, included: z.boolean(),
+  basis: z.enum(['PER_KG', 'PER_KG_TIERED', 'PER_SHIPMENT', 'PER_PIECE', 'PER_CBM', 'PER_CONTAINER', 'MINIMUM', 'MANUAL']),
+  rate: optionalDecimal, currency: currencySchema, included: z.boolean(),
   minimumAmount: optionalDecimal.optional(), manualAmount: optionalDecimal.optional(),
+  breaks: z.array(z.object({ weight: positiveDecimal, rate: decimalSchema })).max(50).optional(),
+}).superRefine((input, ctx) => {
+  if (input.basis !== 'PER_KG_TIERED') {
+    if (input.rate === '') ctx.addIssue({ code: 'custom', path: ['rate'], message: '請填寫附加費運價' });
+    if (input.breaks?.length) ctx.addIssue({ code: 'custom', path: ['breaks'], message: '重量級距僅適用按 KG 重量級距計價' });
+    return;
+  }
+  if (input.rate === '' && !input.minimumAmount && !input.breaks?.length) ctx.addIssue({ code: 'custom', path: ['rate'], message: '重量級距費用請至少設定 Normal、MIN 或一個重量級距' });
+  const weights = (input.breaks ?? []).map(tier => decimalSchema.safeParse(tier.weight).success ? new Decimal(tier.weight).toString() : tier.weight);
+  if (new Set(weights).size !== weights.length) ctx.addIssue({ code: 'custom', path: ['breaks'], message: '附加費重量級距不得重複' });
 });
 export const contractSchema = z.object({
   customerId: identifier, number: shortText.min(1, '請輸入合約編號'), status: entityStatus,
@@ -116,7 +126,7 @@ export const quoteSchema = matchBase.extend({
   if (!isFcl && input.containerCount !== 0) ctx.addIssue({ code: 'custom', path: ['containerCount'], message: '僅海運整櫃 FCL 可設定櫃數' });
   if (!isFcl && input.cargo.length === 0) ctx.addIssue({ code: 'custom', path: ['cargo'], message: '空運與海運散貨請至少輸入一組貨物' });
   if (!isFcl && input.temporaryCharges.some((charge) => charge.basis === 'PER_CONTAINER')) ctx.addIssue({ code: 'custom', path: ['temporaryCharges'], message: '每櫃附加費僅適用海運整櫃 FCL' });
-  if (isFcl && input.cargo.length === 0 && input.temporaryCharges.some((charge) => !charge.included && ['PER_KG', 'PER_CBM', 'PER_PIECE'].includes(charge.basis))) ctx.addIssue({ code: 'custom', path: ['cargo'], message: '按重量、材積或件數計算附加費時須輸入貨物資料' });
+  if (isFcl && input.cargo.length === 0 && input.temporaryCharges.some((charge) => !charge.included && ['PER_KG', 'PER_KG_TIERED', 'PER_CBM', 'PER_PIECE'].includes(charge.basis))) ctx.addIssue({ code: 'custom', path: ['cargo'], message: '按重量、材積或件數計算附加費時須輸入貨物資料' });
   if (input.fxRate && !input.fxDate) ctx.addIssue({ code: 'custom', path: ['fxDate'], message: '使用匯率時須記錄日期' });
   const ids = input.chargeOverrides.map((c) => c.chargeId);
   if (new Set(ids).size !== ids.length) ctx.addIssue({ code: 'custom', path: ['chargeOverrides'], message: '同一合約費用不得重複調整' });

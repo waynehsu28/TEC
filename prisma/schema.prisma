@@ -88,8 +88,18 @@ model ContractCharge {
   included      Boolean @default(false)
   minimumAmount String @default("")
   manualAmount  String @default("")
+  breaks        ContractChargeRateBreak[]
   @@index([versionId])
   @@map("ContractCharges")
+}
+model ContractChargeRateBreak {
+  id       String @id @default(cuid())
+  chargeId String
+  charge   ContractCharge @relation(fields: [chargeId], references: [id], onDelete: Cascade)
+  weight   String
+  rate     String
+  @@unique([chargeId, weight])
+  @@map("ContractChargeRateBreaks")
 }
 model Quote {
   id                String @id @default(cuid())
@@ -150,6 +160,9 @@ model QuoteCharge {
   originalAmount String
   amount         String
   temporary      Boolean
+  appliedBreak   String @default("")
+  quantity       String @default("")
+  minimumApplied Boolean @default(false)
   @@index([quoteId])
   @@map("QuoteCharges")
 }

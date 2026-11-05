@@ -24,6 +24,8 @@ npm run codespaces:start
 
 `codespaces:start` 會先執行 `db:setup`，在既有資料庫上套用 migration，保留客戶、合約及歷史報價，再重新編譯目前程式碼並以 `npm start` 啟動。已就緒的受管理 production 服務會直接沿用；更新程式碼後須先停止再啟動。舊版的開發服務也可用 `codespaces:stop` 停止。不要刪除 `prisma/dev.db` 或執行 `migrate reset`。若 Git 提示分支或未提交修改衝突，先處理自己的修改，勿強制覆寫。若此次同時更新容器設定，可在備份與更新後，從命令面板執行 **Codespaces: Rebuild Container**。
 
+Trucking 重量級距功能新增 migration `20261105000300_tiered_charge_rates`，保存附加費級距及報價套用紀錄；既有使用者也須完成上面的停止、備份、`git pull`、`npm ci` 與啟動步驟，不要以空白資料庫取代原檔。
+
 日常 Codespaces 預覽不使用開發模式的 HMR；需要除錯時，先停止 production 服務，再手動執行 `npm run dev`。功能頁由網址保存，重新整理後會回到目前功能；尚未儲存的表單內容仍須先儲存。
 
 不要將連接埠改為 Public 或組織共享；私人預覽使用 GitHub 的身分驗證，本系統仍沒有自己的登入權限。詳細啟動、重啟、故障排除及資料備份方式見 [Codespaces 操作說明](docs/codespaces.md)。
@@ -84,6 +86,8 @@ npm start
 國家合約建檔與海空運範例見 [海空運國家價操作說明](docs/air-sea-country-rates.md)，新增或修改客戶成功後，系統會先顯示資料庫回傳的客戶、清除搜尋／狀態篩選並標示該列，再同步其他資料。若顯示「客戶已儲存，但重新讀取資料失敗」，代表儲存已完成，請使用「重新整理資料」重試，不必重複新增。
 
 完整計價判定見 [商業規則](docs/business-rules.md)，驗收方式與測試結果見 [驗收紀錄](docs/acceptance.md)。
+
+**Trucking Charge 重量級距**：在合約附加費選「重量級距 Per KG」，可為該項獨立輸入 Normal、+45／+100／+300／+500／+1000 KG 及自訂級距。空運按進位後計費重、海運按貨物總實重，選最高已達級距的單價乘整票重量；該項最低金額是固定下限，已含費用維持零加收。報價時可調整本次套用單價，不回寫合約；臨時費用也支援相同設定及分頁草稿恢復。保存後，歷史報價與客戶 PDF 記錄使用的 KG、級距與單價，舊快照不重算。操作見 [海空運國家價說明](docs/air-sea-country-rates.md#trucking-charge-重量級距)。
 
 ## 資料與歷史紀錄
 

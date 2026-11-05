@@ -108,6 +108,35 @@ export function calculateFreight(contract: ContractCandidate, weightOrWeights: s
   return { ...metadata, amount: amount(minimumApplied ? minimum! : raw), currency: contract.currency, rate: new D(rate).toString(), appliedBreak, minimumApplied };
 }
 export interface ChargeContext { transportMode?: TransportMode; seaShipmentType?: SeaShipmentType | ''; containerCount?: number }
+/** Select one KG unit rate for the entire trucking/ancillary charge, independently of freight tiers. */
+export function resolveTieredChargeRate(charge: ChargeInput, weights: Weights, context: ChargeContext = {}): { rate: string; appliedBreak: string; quantity: string } {
+  if (charge.basis !== 'PER_KG_TIERED') throw new Error('此費用不是按 KG 重量級距計價');
+  if (weights.cargoProvided === false) {
+    if (charge.included) return { rate: charge.rate, appliedBreak: 'Included', quantity: '' };
+    throw new Error('此附加費需要貨物重量、材積或件數，請先輸入貨物資料');
+  }
+  const source = (context.transportMode ?? 'AIR') === 'SEA' ? weights.grossWeight : weights.chargeableWeight;
+  if (source === null) throw new Error('缺少附加費計費重量');
+  const quantity = nonnegative(source, (context.transportMode ?? 'AIR') === 'SEA' ? '實際重量' : '計費重量');
+  const eligible = (charge.breaks ?? []).filter(tier => positive(tier.weight, '附加費重量級距').lte(quantity))
+    .sort((a, b) => new D(b.weight).cmp(a.weight));
+  const selected = eligible[0];
+  const rate = selected?.rate ?? charge.rate;
+  if (rate !== '') nonnegative(rate, '附加費運價');
+  else if ((charge.minimumAmount === undefined || charge.minimumAmount === '') && !charge.included) throw new Error('此計費重量沒有適用的附加費級距、Normal 或最低收費');
+  return { rate, appliedBreak: selected ? `+${new D(selected.weight).toString()} KG` : rate === '' && charge.minimumAmount ? 'MIN' : 'Normal', quantity: quantity.toFixed() };
+}
+function tieredChargeAmount(charge: ChargeInput, selection: ReturnType<typeof resolveTieredChargeRate>, rate: string): { amount: string; minimumApplied: boolean } {
+  if (charge.included) return { amount: '0.00', minimumApplied: false };
+  const minimum = charge.minimumAmount === undefined || charge.minimumAmount === '' ? null : nonnegative(charge.minimumAmount, '附加費最低收費');
+  if (rate === '') {
+    if (minimum === null) throw new Error('此計費重量沒有適用的附加費級距、Normal 或最低收費');
+    return { amount: amount(minimum), minimumApplied: true };
+  }
+  const raw = nonnegative(selection.quantity, '附加費計費重量').mul(nonnegative(rate, '附加費運價'));
+  const minimumApplied = minimum !== null && raw.lt(minimum);
+  return { amount: amount(minimumApplied ? minimum! : raw), minimumApplied };
+}
 function chargeAmount(charge: ChargeInput, weights: Weights, rate: string, manualAmount: string | undefined, context: ChargeContext): string {
   const numericRate = nonnegative(rate, '附加費運價');
   // A container charge is only meaningful on a sea FCL shipment, even if marked included.
@@ -152,6 +181,16 @@ export function calculateCharges(contractCharges: ChargeInput[], overrides: Quot
   if (temporaryCharges.some((c) => !c.included && includedNames.has(norm(c.name)))) throw new Error('臨時費用與已包含的合約費用重複，不可重複計收');
   return [...contractCharges.map((c) => ({ c, temporary: false })), ...temporaryCharges.map((c) => ({ c, temporary: true }))].map(({ c, temporary }) => {
     const override = temporary ? undefined : overrides.find((o) => o.chargeId === c.id);
+    if (c.basis === 'PER_KG_TIERED') {
+      const selection = resolveTieredChargeRate(c, weights, context);
+      const rate = override?.rate ?? selection.rate;
+      const original = tieredChargeAmount(c, selection, selection.rate);
+      const applied = tieredChargeAmount(c, selection, rate);
+      return { name: c.name, basis: c.basis, currency: c.currency, included: c.included, originalRate: selection.rate, appliedRate: rate,
+        originalAmount: original.amount, amount: applied.amount, temporary,
+        appliedBreak: selection.appliedBreak === 'MIN' && override ? 'Override' : selection.appliedBreak,
+        quantity: selection.quantity, minimumApplied: applied.minimumApplied };
+    }
     const rate = override?.rate ?? c.rate;
     return { name: c.name, basis: c.basis, currency: c.currency, included: c.included, originalRate: c.rate, appliedRate: rate,
       originalAmount: chargeAmount(c, weights, c.rate, c.manualAmount, context), amount: chargeAmount(c, weights, rate, override?.manualAmount ?? c.manualAmount, context), temporary };
