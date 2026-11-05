@@ -94,6 +94,14 @@ export default function Home() {
     return () => { mounted.current = false; refreshGeneration.current++; };
   }, [refresh]);
 
+  const handleCustomerSaved = useCallback((customer: Customer) => {
+    if (!mounted.current) return;
+    // Discard reads started before this confirmed write, then show its canonical
+    // server response immediately instead of depending on four follow-up reads.
+    refreshGeneration.current++;
+    setCustomers(current => [customer, ...current.filter(item => item.id !== customer.id)]);
+  }, []);
+
   function goToModule(module: WorkspaceModule) { setNotice(''); navigate({ module }); }
   function openCustomer(id: string, module: 'contracts' | 'history') { setNotice(''); navigate({ module, customerId: id }); }
   function revise(quote: QuoteRecord) { setNotice(''); navigate({ module: 'quote', revisionId: quote.id }); }
@@ -136,7 +144,7 @@ export default function Home() {
         {notice && <div role="status" className="alert success">{notice}</div>}
         {loading ? <div className="panel empty">正在讀取工作站資料庫…</div> : settings && <ModuleBoundary resetKey={workspaceHash(route)}>
           {route.module === 'dashboard' && <Dashboard customers={customers} contracts={contracts} quotes={quotes} onNavigate={goToModule} onQuote={id => navigate({ module: 'history', quoteId: id })} />}
-          {route.module === 'customers' && <Customers customers={customers} onChanged={refresh} onContracts={id => openCustomer(id, 'contracts')} onHistory={id => openCustomer(id, 'history')} />}
+          {route.module === 'customers' && <Customers customers={customers} onSaved={handleCustomerSaved} onChanged={refresh} onContracts={id => openCustomer(id, 'contracts')} onHistory={id => openCustomer(id, 'history')} />}
           {route.module === 'contracts' && <Contracts customers={customers} contracts={contracts} customerFilter={route.customerId ?? ''} onFilter={id => navigate({ module: 'contracts', customerId: id || null })} onChanged={refresh} />}
           {route.module === 'settings' && <SettingsForm settings={settings} onSaved={refresh} />}
           {route.module === 'quote' && (missingRevision
