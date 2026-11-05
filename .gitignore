@@ -8,3 +8,4 @@ node_modules/
 *.tsbuildinfo
 coverage/
 next-env.d.ts
+.devcontainer/.state/

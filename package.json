@@ -12,7 +12,9 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "next typegen && tsc --noEmit",
-    "postinstall": "prisma generate"
+    "postinstall": "prisma generate",
+    "codespaces:start": "node .devcontainer/start.mjs",
+    "codespaces:stop": "node .devcontainer/stop.mjs"
   },
   "dependencies": {
     "@prisma/adapter-libsql": "6.19.0",

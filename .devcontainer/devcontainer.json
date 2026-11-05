@@ -1,0 +1,16 @@
+{
+  "name": "TEC Air Freight Quotation",
+  "image": "mcr.microsoft.com/devcontainers/typescript-node:5-24-bookworm",
+  "remoteUser": "node",
+  "forwardPorts": [3000],
+  "portsAttributes": {
+    "3000": {
+      "label": "TEC 航空貨運報價（請保持 Private）",
+      "onAutoForward": "openBrowser",
+      "protocol": "http"
+    }
+  },
+  "postCreateCommand": "bash .devcontainer/setup.sh",
+  "postStartCommand": "npm run codespaces:start",
+  "waitFor": "postCreateCommand"
+}

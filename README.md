@@ -1,8 +1,16 @@
 # Air Freight Internal Quotation System
 
-供台灣航空貨運承攬公司在本機使用的內部報價 MVP。以客戶合約售價計算應收運費，另行輸入成本，保留合約版本與報價快照，並產生不含內部成本的客戶 PDF。
+供台灣航空貨運承攬公司在本機或私人 GitHub Codespaces 使用的內部報價 MVP。以客戶合約售價計算應收運費，另行輸入成本，保留合約版本與報價快照，並產生不含內部成本的客戶 PDF。
 
-技術：Next.js、TypeScript、Tailwind CSS、Prisma 6.19、SQLite、Zod、Decimal.js、PDFKit、Vitest。Prisma 透過官方 `@prisma/adapter-libsql` 操作本機 SQLite 檔案；不需要 LibSQL/Turso 帳號、付費 API、雲端資料庫或其他第三方帳號。
+技術：Next.js、TypeScript、Tailwind CSS、Prisma 6.19、SQLite、Zod、Decimal.js、PDFKit、Vitest。Prisma 透過官方 `@prisma/adapter-libsql` 操作本機 SQLite 檔案；不需要 LibSQL/Turso 帳號、付費 API 或雲端資料庫；本機使用不需第三方帳號，Codespaces 使用你自己的 GitHub 帳號。
+
+## Codespaces：在 GitHub 瀏覽器操作
+
+不想在 Windows 安裝 Node.js，可在 [TEC GitHub 倉庫](https://github.com/waynehsu28/TEC) 選 **Code → Codespaces → Create codespace on main**。容器會自動安裝依賴、建立 SQLite 並啟動系統。等設定完成後，在底部 **Ports** 找到 **3000**，確認 **Visibility = Private**，再按 **Open in Browser**。
+
+已存在的 Codespace 請先取得最新 `main`，再從命令面板執行 **Codespaces: Rebuild Container**。不要將連接埠改為 Public 或組織共享；私人預覽使用 GitHub 的身分驗證，本系統仍沒有自己的登入權限。詳細啟動、重啟、故障排除及資料備份方式見 [Codespaces 操作說明](docs/codespaces.md)。
+
+Codespaces 有帳號額度及可能的使用費用，建立前請確認 GitHub 顯示的計費對象與額度。資料留在你自己的 Codespace，並不會隨 Git 推送或下載原始碼自動同步。
 
 ## GitHub 下載與自動測試
 
@@ -43,7 +51,7 @@ npm run build
 npm start
 ```
 
-`dev` 與 `start` 均綁定 `127.0.0.1`。第一版沒有正式身分驗證、使用者權限或網際網路部署設定，僅限本機使用；不要改綁 `0.0.0.0`、對外轉發連接埠或公開部署。
+`dev` 與 `start` 均綁定 `127.0.0.1`，Codespaces 也經由 GitHub 私人連接埠轉送存取，不必改綁 `0.0.0.0`。第一版沒有正式身分驗證、使用者權限或公開網路部署設定，僅限本機或私人 Codespaces 使用；不要自行公開轉發連接埠或部署到網際網路。
 
 ## 日常操作
 

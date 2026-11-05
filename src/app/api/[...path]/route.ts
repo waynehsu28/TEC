@@ -2,18 +2,14 @@ import { NextRequest, NextResponse } from 'next/server';
 import { Prisma } from '@prisma/client';
 import { ZodError } from 'zod';
 import { service, ServiceError } from '@/lib/service';
+import { getRequestAccessError } from '@/lib/request-access';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
-const LOCAL_HOST = /^(localhost|127\.0\.0\.1|\[::1\])(?::\d+)?$/i;
 async function handler(req: NextRequest, context: { params: Promise<{ path: string[] }> }) {
   try {
-    const host = req.headers.get('host') ?? '';
-    if (!LOCAL_HOST.test(host)) throw new ServiceError('第一版僅允許本機存取', 403);
+    const accessError = getRequestAccessError(req.headers, req.method);
+    if (accessError) throw new ServiceError(accessError, 403);
     const write = req.method !== 'GET';
-    const origin = req.headers.get('origin');
-    if (write && ((origin && origin !== `http://${host}` && origin !== `https://${host}`) || req.headers.get('sec-fetch-site') === 'cross-site')) {
-      throw new ServiceError('拒絕跨來源寫入要求', 403);
-    }
     const { path } = await context.params;
     const [resource, id] = path;
     if (path.length > 2) throw new ServiceError('找不到此 API', 404);

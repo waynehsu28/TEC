@@ -1,3 +1,9 @@
 import type { NextConfig } from 'next';
-const config: NextConfig = { serverExternalPackages: ['pdfkit', '@prisma/client'], experimental: { cpus: 2 } };
+import { getCodespacesPreviewHost } from './src/lib/request-access';
+const previewHost = getCodespacesPreviewHost();
+const config: NextConfig = {
+  serverExternalPackages: ['pdfkit', '@prisma/client'],
+  allowedDevOrigins: previewHost ? [previewHost] : [],
+  experimental: { cpus: 2 },
+};
 export default config;

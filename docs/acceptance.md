@@ -79,6 +79,16 @@ PDF 以 `pdftotext` 擷取真實檔案，確認繁體中文、售價與內部資
 
 Windows 實機驗證需在目標 Windows x64／Node.js 24 LTS 電腦執行；Linux 測試結果不能替代。Windows 驅動由 npm 平台套件提供，但本次沒有 Windows 執行環境，因此未宣稱 Windows 測試通過。
 
+## Codespaces 設定驗證（2026-11-05）
+
+加入私人 Codespaces 預覽設定後，完整回歸結果為 **77 passed、0 failed、0 skipped**：計算 34、SQLite 11、PDF 5、Logo 4、API 6、預覽來源 11、程序生命週期 6。`npm run typecheck` 與 `npm run build` 均通過；既有 Windows／本機啟動指令保留。
+
+`.devcontainer/setup.sh` 已在目前 Linux 工作區實際執行，重裝鎖定依賴並重跑 migration，既有 `.env` 和資料庫保留。使用獨立暫存 SQLite 與模擬 GitHub Codespaces 環境變數，實際執行 `codespaces:start`、重複啟動、`codespaces:stop` 和重新啟動。重複啟動重用服務；重啟後兩份測試報價與 USD 462.00 毛利快照保持不變。PID 重用、無主子程序群組、不可確認所有權等情境以回歸測試驗證，不會誤停無關程序或誤報已可安全備份。
+
+以原生 HTTP 用戶端模擬代理的外部 Host／HTTPS Origin／X-Forwarded-Host，完成建客戶、合約、420 KG 報價、USD 1,806.00 收入、USD 462.00 毛利及 PDF 下載。API 與 PDF 接受目前工作區的精確預覽網址，拒絕其他工作區、偽造轉送主機與跨來源寫入；Next.js 開發資源也已驗證目前預覽 Origin 可用、其他工作區 Origin 被拒絕。
+
+以上為本機模擬及自動化驗證，**本次沒有建立真正的 GitHub Codespace，也沒有宣稱容器映像建置、GitHub 帳號驗證或平台轉送已實測成功**。實際使用時依 [Codespaces 操作說明](codespaces.md) 建立／重建容器，並維持 3000 連接埠 Private。私人連接埠由 GitHub 驗證；應用程式仍沒有自己的登入權限。
+
 ## 第一版未納入
 
 正式身分驗證與存取控制、外網部署、客戶入口、航空公司即時 API、自動成本與匯率來源、Weight Break Optimization、批次 Excel 匯入匯出、多使用者協作、會計入帳與稅額計算。不提供未接資料庫的假操作按鈕，也不自動建立真實客戶或運價。

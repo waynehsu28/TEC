@@ -1,12 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { service, ServiceError } from '@/lib/service';
 import { generateQuotePdf } from '@/lib/pdf';
+import { getRequestAccessError } from '@/lib/request-access';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 export async function GET(req: NextRequest, context: { params: Promise<{ id: string }> }) {
-  if (!/^(localhost|127\.0\.0\.1|\[::1\])(?::\d+)?$/i.test(req.headers.get('host') ?? '')) {
-    return NextResponse.json({ error: '第一版僅允許本機存取' }, { status: 403 });
-  }
+  const accessError = getRequestAccessError(req.headers, req.method);
+  if (accessError) return NextResponse.json({ error: accessError }, { status: 403 });
   try {
     const { id } = await context.params;
     const quote = await service.getQuote(id);
