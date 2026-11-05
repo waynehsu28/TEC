@@ -1,13 +1,14 @@
 import { readFileSync, readdirSync, realpathSync } from 'node:fs';
 
 const exited = state => state === 'Z' || state === 'X';
-/** Match the detached npm leader we created, rather than any recycled PID. */
-export function isOwnedServer(pid, root, leader) {
-  return Number.isSafeInteger(pid) && pid > 1 && leader !== null && !exited(leader.state)
-    && leader.pid === pid && leader.group === pid && leader.cwd === root
-    && /\bnpm(?:-cli\.js)?(?:\s+run)?\s+dev(?:\s|$)/.test(leader.command ?? '')
-    && /--port(?:=|\s+)3000(?:\s|$)/.test(leader.command ?? '');
+/** Match our detached npm leader, including older managed development servers. */
+export function getOwnedServerMode(pid, root, leader) {
+  if (!Number.isSafeInteger(pid) || pid <= 1 || leader === null || exited(leader.state)
+    || leader.pid !== pid || leader.group !== pid || leader.cwd !== root) return null;
+  const command = /^(?:(?:\S*\/)?node\s+)?(?:\S*\/)?npm(?:-cli\.js)?\s+(?:run\s+)?(dev|start)(?:\s+--)?\s+--port(?:=|\s+)3000\s*$/.exec(leader.command ?? '');
+  return command ? command[1] === 'start' ? 'production' : 'development' : null;
 }
+export const isOwnedServer = (pid, root, leader) => getOwnedServerMode(pid, root, leader) !== null;
 export function groupHasLiveMembers(pid, processes) {
   return Number.isSafeInteger(pid) && pid > 1 && processes.some(item => item.group === pid && !exited(item.state));
 }
@@ -33,8 +34,8 @@ export function listProcessStats() {
   }
   return result;
 }
-export function inspectManagedServer(pid, root) {
-  if (!Number.isSafeInteger(pid) || pid <= 1) return 'invalid';
+export function inspectManagedServerDetails(pid, root) {
+  if (!Number.isSafeInteger(pid) || pid <= 1) return { status: 'invalid', mode: null };
   const processes = listProcessStats();
   let leader = processes.find(item => item.pid === pid) ?? null;
   if (leader !== null && !exited(leader.state)) {
@@ -45,6 +46,8 @@ export function inspectManagedServer(pid, root) {
       leader = { ...leader, cwd: '', command: '' };
     }
   }
-  return classifyManagedServer(pid, root, leader, processes);
+  const status = classifyManagedServer(pid, root, leader, processes);
+  return { status, mode: status === 'owned' ? getOwnedServerMode(pid, root, leader) : null };
 }
+export const inspectManagedServer = (pid, root) => inspectManagedServerDetails(pid, root).status;
 export const groupIsAlive = pid => groupHasLiveMembers(pid, listProcessStats());

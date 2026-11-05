@@ -7,7 +7,7 @@ Codespaces 讓你以 GitHub 帳號在瀏覽器使用本專案，不必在 Window
 1. 登入 GitHub，開啟 [waynehsu28/TEC](https://github.com/waynehsu28/TEC)，確認分支為 `main`。
 2. 選 **Code → Codespaces → Create codespace on main**。若出現進階選項，使用倉庫中的 `.devcontainer/devcontainer.json`。
 3. 等待容器建立與安裝完成。設定採用官方 Node.js 24 容器，依 lockfile 執行 `npm ci --ignore-scripts`，保留既有 `.env`，再執行 `npm run db:setup`。
-4. 容器每次啟動會自動執行 `npm run codespaces:start`。指令會在背景啟動開發伺服器，並等設定 API 回傳成功才顯示 ready；重複執行不會再開一份已就緒的服務。
+4. 容器每次啟動會自動執行 `npm run codespaces:start`。服務停止時，指令會先套用資料庫 migration、編譯目前程式碼，再以 `npm start` 在背景啟動 production 預覽，等設定 API 回傳成功才顯示 ready。編譯可能需要數分鐘，請等待終端機完成；已就緒且由本啟動器管理的 production 服務會直接沿用，不會重複編譯或再開一份。
 5. 在底部 **Ports** 找到連接埠 **3000**，確認 **Visibility = Private**，再按 **Open in Browser**。若未自動開啟 Ports 面板，可由 **View → Terminal** 開啟底部面板後選取 **Ports**。
 6. 初次畫面沒有測試客戶或價格。先設定公司資料，再建立自己的客戶與合約。
 
@@ -17,11 +17,17 @@ Codespaces 讓你以 GitHub 帳號在瀏覽器使用本專案，不必在 Window
 
 先保存自己尚未提交的程式碼修改，取得倉庫最新 `main`；不要直接覆寫自己的修改。接著按 **Ctrl+Shift+P** 開啟命令面板，執行 **Codespaces: Rebuild Container**，等待安裝與啟動完成。
 
-重新連線到已停止的 Codespace 時，背景程序會重新啟動。若只需重新確認目前服務，可在專案根目錄執行：
+重新連線到已停止的 Codespace 時，啟動器會重新編譯及啟動背景服務。若只需重新確認目前服務，可在專案根目錄執行：
 
 ```bash
 npm run codespaces:start
 ```
+
+若之前使用舊版自動啟動的開發服務，先執行 `npm run codespaces:stop`，再執行 `npm run codespaces:start`。啟動器不會把開發服務或其他程式誤判成已就緒的 production 預覽，也不會停止不屬於本專案的程序。
+
+日常預覽使用已編譯的 production 程式，不會連線至開發模式的 HMR。更新程式碼後，請停止服務並重新執行 `npm run codespaces:start`，讓新程式完成編譯後再開啟預覽。功能頁會由網址保存，重新整理後會回到該功能。未儲存的報價草稿暫存在目前瀏覽器分頁，重整後可恢復；恢復後仍須重新試算並明確儲存至 SQLite。關閉分頁不保證草稿保留，其他管理表單更新前仍請先儲存。
+
+需要手動除錯時，先執行 `npm run codespaces:stop`，再在終端機執行 `npm run dev`。除錯結束後按 `Ctrl+C`，再執行 `npm run codespaces:start` 恢復 production 預覽。
 
 不用執行 `gh auth login`，不用另建 Personal Access Token，也不要把權杖貼進 `.env` 或聊天訊息。
 
@@ -29,7 +35,7 @@ npm run codespaces:start
 
 GitHub 官方說明指出，forwarded ports 預設為 Private，Codespace 重新啟動時會將曾設為 Public 的連接埠恢復 Private。Private 連接埠只有 Codespace 建立者經 GitHub 驗證後可存取。請仍在每次開啟 Ports 面板時確認 **Private**，不要改為 Public 或組織共享。
 
-本專案的 API、PDF 與 Next.js 開發預覽只額外接受執行中 Codespace 的精確 3000 連接埠網址。網址由 GitHub 提供的 `CODESPACES`、`CODESPACE_NAME` 與 `GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN` 組成；不會開放所有 `*.app.github.dev`，也不需要允許任意網域。原有本機 `127.0.0.1` 操作仍保留。
+本專案的 API、PDF 及手動除錯時的 Next.js 開發預覽，只額外接受執行中 Codespace 的精確 3000 連接埠網址。網址由 GitHub 提供的 `CODESPACES`、`CODESPACE_NAME` 與 `GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN` 組成；不會開放所有 `*.app.github.dev`，也不需要允許任意網域。原有本機 `127.0.0.1` 操作仍保留。
 
 Host／Origin 檢查不是應用程式登入。私人預覽仰賴 GitHub 平台的身分驗證；若使用者手動把連接埠設為 Public，知道網址的他人可能存取系統。因此這項設定不能用於公開網站或正式多人服務。
 
@@ -43,13 +49,15 @@ Host／Origin 檢查不是應用程式登入。私人預覽仰賴 GitHub 平台�
 npm run codespaces:start
 ```
 
-查看啟動紀錄：
+資料庫設定與編譯過程會直接顯示於終端機；其中任何一步失敗，都不會繼續啟動服務。編譯完成後才開始最長 45 秒的就緒檢查。查看背景伺服器紀錄：
 
 ```bash
 tail -n 80 .devcontainer/.state/server.log
 ```
 
-若顯示缺少依賴、Client 或資料庫尚未遷移，先停止自動啟動的服務，再重跑設定：
+若顯示開發服務仍在執行或 production 服務未就緒，先執行 `npm run codespaces:stop`，再執行 `npm run codespaces:start`。若連接埠被手動啟動的服務佔用，請回到原終端機按 `Ctrl+C`；啟動器不會擅自停止其他服務。
+
+若顯示缺少依賴或 Client，先停止自動啟動的服務，再重跑設定：
 
 ```bash
 npm run codespaces:stop

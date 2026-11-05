@@ -6,7 +6,7 @@
 
 ## Codespaces：在 GitHub 瀏覽器操作
 
-不想在 Windows 安裝 Node.js，可在 [TEC GitHub 倉庫](https://github.com/waynehsu28/TEC) 選 **Code → Codespaces → Create codespace on main**。容器會自動安裝依賴、建立 SQLite 並啟動系統。等設定完成後，在底部 **Ports** 找到 **3000**，確認 **Visibility = Private**，再按 **Open in Browser**。
+不想在 Windows 安裝 Node.js，可在 [TEC GitHub 倉庫](https://github.com/waynehsu28/TEC) 選 **Code → Codespaces → Create codespace on main**。容器會自動安裝依賴、建立 SQLite、編譯程式，再啟動 production 預覽。編譯可能需要數分鐘，請等終端機顯示 ready，再在底部 **Ports** 找到 **3000**，確認 **Visibility = Private**，按 **Open in Browser**。
 
 已存在的 Codespace 更新程式前，先在專案根目錄停止服務：
 
@@ -19,11 +19,12 @@ npm run codespaces:stop
 ```bash
 git pull --ff-only origin main
 npm ci --ignore-scripts
-npm run db:setup
 npm run codespaces:start
 ```
 
-`db:setup` 會在既有資料庫上套用新增欄位的 migration，保留客戶、合約及歷史報價；不要刪除 `prisma/dev.db` 或執行 `migrate reset`。若 Git 提示分支或未提交修改衝突，先處理自己的修改，勿強制覆寫。若此次同時更新容器設定，可在備份與更新後，從命令面板執行 **Codespaces: Rebuild Container**。
+`codespaces:start` 會先執行 `db:setup`，在既有資料庫上套用 migration，保留客戶、合約及歷史報價，再重新編譯目前程式碼並以 `npm start` 啟動。已就緒的受管理 production 服務會直接沿用；更新程式碼後須先停止再啟動。舊版的開發服務也可用 `codespaces:stop` 停止。不要刪除 `prisma/dev.db` 或執行 `migrate reset`。若 Git 提示分支或未提交修改衝突，先處理自己的修改，勿強制覆寫。若此次同時更新容器設定，可在備份與更新後，從命令面板執行 **Codespaces: Rebuild Container**。
+
+日常 Codespaces 預覽不使用開發模式的 HMR；需要除錯時，先停止 production 服務，再手動執行 `npm run dev`。功能頁由網址保存，重新整理後會回到目前功能；尚未儲存的表單內容仍須先儲存。
 
 不要將連接埠改為 Public 或組織共享；私人預覽使用 GitHub 的身分驗證，本系統仍沒有自己的登入權限。詳細啟動、重啟、故障排除及資料備份方式見 [Codespaces 操作說明](docs/codespaces.md)。
 
@@ -92,6 +93,14 @@ npm start
 - 報價單號採 `AFQ-YYYYMMDD-0001` 類型的台北日期每日流水號；後續修訂加上 `-R002` 等尾碼，以新紀錄保存並保留來源關係。
 - PDF 只輸出客戶可見欄位，不含買價、內部成本、毛利、毛利率或 Markup。PDF 的使用者自填條款與備註仍應由輸入者確認內容。
 - PDF 使用隨專案提供的繁體中文字型；字型授權見 `public/fonts/LICENSE.txt`，無需 Windows 額外安裝字型。
+
+## 導覽與未儲存報價
+
+功能頁位置會保存在網址，例如 `#quote`；重新整理、上一頁／下一頁或重新連線後會回到原功能，不會重設為營運總覽。歷史報價選取與修訂來源也會保留在網址；客戶名稱、貨物、費用與成本不會放進網址。
+
+未儲存的報價會暫存在**目前瀏覽器分頁**，切換功能或重新整理可恢復；新報價和不同修訂的草稿分開保存。恢復後須重新試算、確認有效合約，再按「儲存報價快照」寫入 SQLite。暫存不是資料庫備份，關閉分頁後不保證仍存在。若瀏覽器禁止暫存，畫面會提示先儲存。
+
+儲存期間會鎖定報價欄位，避免誤以為新修改也已送出。若已切到其他功能，背景儲存完成只提示結果，不會強制切走；過期的試算結果或錯誤也不會覆蓋新輸入。
 
 ## 自動化檢查
 

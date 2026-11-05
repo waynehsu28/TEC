@@ -1,13 +1,23 @@
 import { describe, expect, it } from 'vitest';
-import { classifyManagedServer, groupHasLiveMembers, isOwnedServer } from '../.devcontainer/process-state.mjs';
+import { classifyManagedServer, getOwnedServerMode, groupHasLiveMembers, isOwnedServer } from '../.devcontainer/process-state.mjs';
 const root = '/workspaces/TEC';
 const pid = 321;
-const own = { pid, group: pid, cwd: root, command: 'npm run dev --port 3000', state: 'S' };
+const own = { pid, group: pid, cwd: root, command: 'npm start --port 3000', state: 'S' };
 describe('Codespaces managed-server process ownership', () => {
-  it('recognizes only the detached npm dev leader for this checkout and port', () => {
+  it('recognizes production npm leaders only for this checkout, detached group and port', () => {
     expect(isOwnedServer(pid, root, own)).toBe(true);
-    expect(isOwnedServer(pid, root, { ...own, command: '/usr/bin/node /usr/bin/npm-cli.js run dev -- --port 3000' })).toBe(true);
-    for (const patch of [{ cwd: '/other/project' }, { group: 111 }, { command: 'npm run test --port 3000' }, { command: 'npm run dev --port 4000' }, { state: 'Z' }]) expect(isOwnedServer(pid, root, { ...own, ...patch })).toBe(false);
+    expect(getOwnedServerMode(pid, root, own)).toBe('production');
+    for (const command of ['npm start -- --port 3000', 'npm run start --port=3000', '/usr/bin/node /usr/bin/npm-cli.js start -- --port 3000']) {
+      expect(getOwnedServerMode(pid, root, { ...own, command })).toBe('production');
+    }
+    for (const patch of [{ pid: 111 }, { cwd: '/other/project' }, { group: 111 }, { command: 'npm run test --port 3000' }, { command: 'npm start --port 4000' }, { command: 'npm start --port 3000 --port 4000' }, { command: 'node unrelated-worker.js npm start --port 3000' }, { state: 'Z' }]) expect(isOwnedServer(pid, root, { ...own, ...patch })).toBe(false);
+  });
+  it('keeps ownership of older managed dev servers so an upgrade can stop them safely', () => {
+    for (const command of ['npm run dev --port 3000', '/usr/bin/node /usr/bin/npm-cli.js run dev -- --port 3000']) {
+      const dev = { ...own, command };
+      expect(getOwnedServerMode(pid, root, dev)).toBe('development');
+      expect(classifyManagedServer(pid, root, dev, [dev])).toBe('owned');
+    }
   });
   it('classifies a recycled PID as unowned, so startup may discard it without signalling it', () => {
     const foreign = { ...own, command: 'node unrelated-worker.js' };

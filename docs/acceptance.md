@@ -109,6 +109,24 @@ Windows 實機驗證需在目標 Windows x64／Node.js 24 LTS 電腦執行；Lin
 
 操作與更新方式見 [海空運國家價操作說明](air-sea-country-rates.md) 與 README；已有資料更新前先備份，停止服務後再執行 `git pull --ff-only`、`npm run db:setup` 及 `npm run codespaces:start`。
 
+## 導覽與 Codespaces 預覽穩定性修正（2026-11-05）
+
+舊版可確認的缺陷：目前功能只存在 `useState('dashboard')`，點擊新增報價後網址仍為根目錄；文件一經重載，就回營運總覽。程式沒有刻意轉址回總覽。舊 Codespaces 預覽為開發模式，可能因 HMR 重連或程式更新發生重載，但本次未直接連入使用者的 Codespace，無法斷定其首次點擊當下的具體觸發事件。
+
+已將功能與修訂／歷史選取改由 URL hash 保存，報價草稿在本分頁暫存；新增渲染錯誤邊界、儲存鎖定、過期試算錯誤檢查與延遲儲存導覽保護。Dashboard 有效合約統計也改用當日適用版本。Codespaces 預覽改為 production：每次停止後啟動會先遷移與重新建置，再執行 `npm start`，保留手動 `npm run dev` 除錯方式。
+
+最終結果：**122 passed、0 failed、0 skipped**，共 12 個測試檔。包含實際 React／DOM 測試 9、URL／當日合約版本測試 5、草稿格式／隔離／競態測試 5、程序所有權與模式測試 7，以及原有計價、SQLite、PDF、存取限制測試。`npm run typecheck` 與 production build 通過。使用新 lockfile 執行 `npm ci --ignore-scripts` 重新安裝 232 個套件後，再跑 `db:setup`、122 項測試與 typecheck 全部通過。
+
+真實 Chromium 經本機模擬的 Codespaces HTTPS 代理連至已編譯服務，驗證：
+
+- 點擊新增報價沒有產生文件重載，網址為 `#quote`。
+- 重新整理後保留報價頁與貨物／城市草稿；Back／Forward 正常。
+- 延遲儲存期間欄位鎖定；離開再回同一報價頁、輸入新草稿後，先前儲存完成不會搶走畫面或刪掉新草稿。
+- 歷史報價選取及修訂草稿在重載後保留；新報價與修訂草稿分開。
+- 瀏覽器 page errors 為 0，HMR WebSocket 數為 0。
+
+新的 production 啟動流程、就緒檢查、重複啟動重用及停止自有程序群組均實際執行成功。測試使用獨立暫存 SQLite，正式工作資料庫沒有加入 Demo 資料；本次沒有新增或破壞資料庫 schema。詳細檢查與更新步驟見 [導覽問題修正說明](navigation-fix.md)。
+
 ## 第一版未納入
 
 正式身分驗證與存取控制、外網部署、客戶入口、航空公司即時 API、自動成本與匯率來源、Weight Break Optimization、批次 Excel 匯入匯出、多使用者協作、會計入帳與稅額計算。不提供未接資料庫的假操作按鈕，也不自動建立真實客戶或運價。

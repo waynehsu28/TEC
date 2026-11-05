@@ -5,6 +5,7 @@ import type { CargoItem, ChargeBasis, ChargeInput, ContractCandidate, CostInput,
 import { calculateWeights } from '@/lib/engine';
 import { COUNTRIES } from '@/lib/countries';
 import { chargeBasisLabels, freightBasisLabels, modeName, routeLabel } from '@/lib/transport';
+import { readQuoteDraft, writeQuoteDraft, clearSavedQuoteDraft, quoteDraftStorage } from '@/lib/quote-draft';
 
 const today = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; };
 const emptyCargo = (): CargoItem => ({ pieces: 1, length: '', width: '', height: '', grossWeight: '', weightMode: 'GROUP_TOTAL' });
@@ -25,7 +26,16 @@ function initialInput(settings: Settings, initial: QuoteRecord | null): QuoteInp
 }
 
 export default function QuoteEditor({ customers, settings, initial, onSaved }: { customers: Customer[]; settings: Settings; initial: QuoteRecord | null; onSaved: (record: QuoteRecord) => void }) {
-  const [form, setForm] = useState<QuoteInput>(() => initialInput(settings, initial));
+  const [draft] = useState(() => {
+    const base = initialInput(settings, initial);
+    const restored = readQuoteDraft(quoteDraftStorage(), base.revisionOfId);
+    return { input: restored ? { ...base, ...restored } : base, restored: restored !== null };
+  });
+  const [form, setForm] = useState<QuoteInput>(draft.input);
+  const [draftAvailable, setDraftAvailable] = useState(true);
+  const mounted = useRef(true);
+  const submitting = useRef(false);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const [candidates, setCandidates] = useState<ContractCandidate[]>([]);
   const [matchState, setMatchState] = useState<'idle'|'loading'|'ready'|'error'>('idle');
   const [snapshot, setSnapshot] = useState<QuoteSnapshot | null>(null);
@@ -34,6 +44,7 @@ export default function QuoteEditor({ customers, settings, initial, onSaved }: {
   const [matchError, setMatchError] = useState('');
   const [retry, setRetry] = useState(0);
   const [savedNumber, setSavedNumber] = useState('');
+  useEffect(() => { if (!savedNumber) setDraftAvailable(writeQuoteDraft(quoteDraftStorage(), form)); }, [form, savedNumber]);
   const revision = useRef(0);
   const isSea = form.transportMode === 'SEA';
   const isFcl = isSea && form.seaShipmentType === 'FCL';
@@ -95,20 +106,35 @@ export default function QuoteEditor({ customers, settings, initial, onSaved }: {
   const canCalculate = matchState === 'ready' && cargoReady && containerReady && (candidates.length === 0 ? Boolean(form.manualFreight && form.manualFreight.amount !== '') : Boolean(selected));
   async function preview() {
     setBusy('preview'); setError(''); const current = revision.current;
-    try { const data = await post<QuoteSnapshot>('/api/preview', form); if (revision.current === current) setSnapshot(data); }
-    catch (err) { setError(err instanceof Error ? err.message : '試算失敗'); }
-    finally { setBusy(null); }
+    try {
+      const data = await post<QuoteSnapshot>('/api/preview', form);
+      if (mounted.current && revision.current === current) setSnapshot(data);
+    } catch (err) {
+      if (mounted.current && revision.current === current) setError(err instanceof Error ? err.message : '試算失敗');
+    } finally { if (mounted.current) setBusy(null); }
   }
   async function save() {
+    if (submitting.current) return;
+    submitting.current = true;
+    const submitted = form;
     setBusy('save'); setError('');
-    try { const record = await post<QuoteRecord>('/api/quotes', form); setSavedNumber(`${record.number} · R${record.revision}`); setSnapshot(record.snapshot); onSaved(record); }
-    catch (err) { setError(err instanceof Error ? err.message : '儲存失敗'); }
-    finally { setBusy(null); }
+    try {
+      const record = await post<QuoteRecord>('/api/quotes', submitted);
+      clearSavedQuoteDraft(quoteDraftStorage(), submitted);
+      if (mounted.current) { setSavedNumber(`${record.number} · R${record.revision}`); setSnapshot(record.snapshot); }
+      try { onSaved(record); }
+      catch { if (mounted.current) setError('報價已儲存，但畫面更新失敗。請到報價紀錄查看，避免重複儲存。'); }
+    } catch (err) {
+      if (mounted.current) setError(err instanceof Error ? err.message : '儲存失敗');
+    } finally { submitting.current = false; if (mounted.current) setBusy(null); }
   }
   return <div className="quote-editor">
+    {draft.restored && !savedNumber && <div role="status" className="alert">已恢復此分頁的未儲存報價草稿。儲存前請重新試算並確認合約。</div>}
+    {!draftAvailable && <div role="status" className="alert warning">此瀏覽器目前無法暫存草稿，重整或離開前請先儲存報價。</div>}
     {initial && <div className="alert">修訂 {initial.number} · R{initial.revision}：儲存時建立新修訂版本，原始報價保留。請重新確認目前適用合約及價格。</div>}
     {error && <div role="alert" className="alert error">{error}</div>}
     {savedNumber && <div className="alert success">已儲存 {savedNumber}，可在報價紀錄下載 PDF。</div>}
+    <fieldset disabled={busy === 'save'} style={{ border: 0, margin: 0, padding: 0, minWidth: 0 }}>
     <section className="panel">
       <h3 className="section-title">1. 客戶與運輸條件</h3>
       <div className="form-grid">
@@ -191,5 +217,6 @@ export default function QuoteEditor({ customers, settings, initial, onSaved }: {
       <div className="stat-grid"><div className="stat"><span>Revenue 應收總額 · {form.analysisCurrency}</span><strong>{curr(snapshot.finance.revenue)}</strong></div><div className="stat"><span>{snapshot.finance.costState==='PARTIAL'?'已知成本小計':'Cost 成本'} · {form.analysisCurrency}</span><strong>{curr(snapshot.finance.knownCost)}</strong></div><div className="stat"><span>{snapshot.finance.provisional?'暫估 ':''}Gross Profit · {form.analysisCurrency}</span><strong>{curr(snapshot.finance.grossProfit)}</strong></div><div className="stat"><span>Gross Profit Margin</span><strong>{snapshot.finance.margin===null?'—':`${snapshot.finance.margin}%`}</strong></div><div className="stat"><span>Markup</span><strong>{snapshot.finance.markup===null?'—':`${snapshot.finance.markup}%`}</strong></div></div>
       {snapshot.finance.missingFx&&<p>應收各幣別小計：{Object.entries(snapshot.finance.revenueByCurrency).map(([currency,amount])=>`${currency} ${curr(amount)}`).join(' / ')}；已知成本各幣別小計：{Object.entries(snapshot.finance.costByCurrency).map(([currency,amount])=>`${currency} ${curr(amount)}`).join(' / ')||'未提供'}</p>}
     </section>}
+    </fieldset>
   </div>;
 }
