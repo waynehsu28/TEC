@@ -1,3 +1,4 @@
+import Decimal from 'decimal.js';
 import { countryName } from './countries';
 import type { RoutingTerms, FreightBasis, ChargeBasis } from './types';
 export const modeName = (mode: RoutingTerms['transportMode']) => mode === 'SEA' ? '海運 Sea' : '空運 Air';
@@ -6,9 +7,16 @@ export const chargeBasisLabels: Record<ChargeBasis,string> = { PER_KG: '每公�
 export function routeLabel(route: RoutingTerms & { origin: string; destination: string }): string {
   return route.routeScope === 'COUNTRY' ? `${countryName(route.originCountry)} → ${countryName(route.destinationCountry)}（全國適用）` : `${route.origin} → ${route.destination}`;
 }
-/** Quantities retain their measured precision; only money is rounded to cents. */
+/** General quantities retain their measured precision. */
 export function formatQuantity(value: string | null | undefined): string {
   if (value == null) return '—';
   const [whole, fraction] = value.split('.');
   return whole.replace(/\B(?=(\d{3})+(?!\d))/g, ',') + (fraction === undefined ? '' : `.${fraction}`);
+}
+
+/** Display only: never feed rounded volume weight back into freight calculations. */
+export function formatVolumeWeight(value: string | null | undefined): string {
+  if (value == null) return '—';
+  const [whole, fraction] = new Decimal(value).toFixed(2, Decimal.ROUND_HALF_UP).split('.');
+  return `${whole.replace(/\B(?=(\d{3})+(?!\d))/g, ',')}.${fraction}`;
 }

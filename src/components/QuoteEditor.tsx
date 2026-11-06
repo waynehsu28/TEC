@@ -1,12 +1,13 @@
 'use client';
 
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
-import type { CargoItem, ChargeBasis, ChargeInput, ContractCandidate, CostInput, Currency, Customer, QuoteInput, QuoteRecord, QuoteSnapshot, RouteScope, SeaShipmentType, Settings, TransportMode } from '@/lib/types';
+import type { CargoItem, ChargeBasis, ChargeInput, ContractCandidate, CostInput, Currency, Customer, FxSource, QuoteInput, QuoteRecord, QuoteSnapshot, RouteScope, SeaShipmentType, Settings, TransportMode } from '@/lib/types';
 import { calculateWeights, resolveTieredChargeRate } from '@/lib/engine';
 import { chargeBasisPatch, pricedCharge } from '@/lib/charge-rates';
 import ChargeWeightRates from './ChargeWeightRates';
+import CustomsRatePicker from './CustomsRatePicker';
 import { COUNTRIES } from '@/lib/countries';
-import { chargeBasisLabels, freightBasisLabels, modeName, routeLabel } from '@/lib/transport';
+import { chargeBasisLabels, freightBasisLabels, formatVolumeWeight, modeName, routeLabel } from '@/lib/transport';
 import { readQuoteDraft, writeQuoteDraft, clearSavedQuoteDraft, quoteDraftStorage } from '@/lib/quote-draft';
 
 const today = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; };
@@ -22,16 +23,16 @@ async function post<T>(path: string, body: unknown, signal?: AbortSignal): Promi
 function initialInput(settings: Settings, initial: QuoteRecord | null): QuoteInput {
   if (initial) {
     const input = structuredClone(initial.snapshot.input);
-    return { ...input, transportMode: input.transportMode ?? 'AIR', routeScope: input.routeScope ?? 'AIRPORT', originCountry: input.originCountry ?? '', destinationCountry: input.destinationCountry ?? '', seaShipmentType: input.seaShipmentType ?? '', containerType: input.containerType ?? '', containerCount: input.containerCount ?? 0, revisionOfId: initial.id, status: 'Draft' };
+    return { ...input, fxSource: input.fxSource ?? 'MANUAL', customsRateSide: input.customsRateSide ?? 'EXPORT', transportMode: input.transportMode ?? 'AIR', routeScope: input.routeScope ?? 'AIRPORT', originCountry: input.originCountry ?? '', destinationCountry: input.destinationCountry ?? '', seaShipmentType: input.seaShipmentType ?? '', containerType: input.containerType ?? '', containerCount: input.containerCount ?? 0, revisionOfId: initial.id, status: 'Draft' };
   }
-  return { customerId: '', transportMode: 'AIR', routeScope: 'COUNTRY', originCountry: 'TW', destinationCountry: '', seaShipmentType: '', containerType: '', containerCount: 0, origin: '', destination: '', airline: '', serviceType: '', commodity: '', shipmentDate: today(), cargo: [emptyCargo()], contractVersionId: null, manualFreight: null, chargeOverrides: [], temporaryCharges: [], costs: [], costsComplete: false, analysisCurrency: settings.defaultCurrency, fxRate: settings.exchangeRate, fxDate: settings.exchangeRateDate, validity: '', remarks: '', terms: settings.terms, status: 'Draft', revisionOfId: null };
+  return { customerId: '', transportMode: 'AIR', routeScope: 'COUNTRY', originCountry: 'TW', destinationCountry: '', seaShipmentType: '', containerType: '', containerCount: 0, origin: '', destination: '', airline: '', serviceType: '', commodity: '', shipmentDate: today(), cargo: [emptyCargo()], contractVersionId: null, manualFreight: null, chargeOverrides: [], temporaryCharges: [], costs: [], costsComplete: false, analysisCurrency: settings.defaultCurrency, fxRate: settings.exchangeRate, fxDate: settings.exchangeRateDate, fxSource: settings.exchangeRateSource ?? 'MANUAL', customsRateSide: settings.customsRateSide ?? 'EXPORT', validity: '', remarks: '', terms: settings.terms, status: 'Draft', revisionOfId: null };
 }
 
 export default function QuoteEditor({ customers, settings, initial, onSaved }: { customers: Customer[]; settings: Settings; initial: QuoteRecord | null; onSaved: (record: QuoteRecord) => void }) {
   const [draft] = useState(() => {
     const base = initialInput(settings, initial);
     const restored = readQuoteDraft(quoteDraftStorage(), base.revisionOfId);
-    return { input: restored ? { ...base, ...restored } : base, restored: restored !== null };
+    return { input: restored ? { ...base, ...restored, fxSource: restored.fxSource ?? 'MANUAL' } : base, restored: restored !== null };
   });
   const [form, setForm] = useState<QuoteInput>(draft.input);
   const [draftAvailable, setDraftAvailable] = useState(true);
@@ -46,11 +47,14 @@ export default function QuoteEditor({ customers, settings, initial, onSaved }: {
   const [matchError, setMatchError] = useState('');
   const [retry, setRetry] = useState(0);
   const [savedNumber, setSavedNumber] = useState('');
+  const [fxStatus, setFxStatus] = useState<'loading' | 'ready' | 'error'>('loading');
   useEffect(() => { if (!savedNumber) setDraftAvailable(writeQuoteDraft(quoteDraftStorage(), form)); }, [form, savedNumber]);
   const revision = useRef(0);
   const isSea = form.transportMode === 'SEA';
   const isFcl = isSea && form.seaShipmentType === 'FCL';
   const isCountry = form.routeScope === 'COUNTRY';
+  const customsFx = form.fxSource === 'CUSTOMS';
+  const customsReady = !customsFx || (fxStatus === 'ready' && form.customsRate?.date === form.shipmentDate && form.customsRate.side === (form.customsRateSide ?? 'EXPORT'));
   const routingKeys: (keyof QuoteInput)[] = ['customerId', 'transportMode', 'routeScope', 'originCountry', 'destinationCountry', 'seaShipmentType', 'containerType', 'origin', 'destination', 'airline', 'serviceType', 'commodity', 'shipmentDate'];
   function update(patch: Partial<QuoteInput>, resetMatch = false) {
     revision.current++;
@@ -110,7 +114,7 @@ export default function QuoteEditor({ customers, settings, initial, onSaved }: {
   }
   const cargoReady = weights !== null && (isFcl || form.cargo.length > 0);
   const containerReady = !isFcl || Number.isInteger(form.containerCount) && (form.containerCount ?? 0) > 0;
-  const canCalculate = matchState === 'ready' && cargoReady && containerReady && (candidates.length === 0 ? Boolean(form.manualFreight && form.manualFreight.amount !== '') : Boolean(selected));
+  const canCalculate = matchState === 'ready' && cargoReady && containerReady && customsReady && (candidates.length === 0 ? Boolean(form.manualFreight && form.manualFreight.amount !== '') : Boolean(selected));
   async function preview() {
     setBusy('preview'); setError(''); const current = revision.current;
     try {
@@ -184,7 +188,7 @@ export default function QuoteEditor({ customers, settings, initial, onSaved }: {
         <td><button type="button" className="btn btn-secondary" disabled={!isFcl && form.cargo.length===1} onClick={()=>change('cargo',form.cargo.filter((_,n)=>n!==i))}>移除</button></td>
       </tr>)}</tbody></table></div>}
       <button type="button" className="btn btn-secondary" onClick={()=>change('cargo',[...form.cargo,emptyCargo()])}>＋ 新增貨物列</button>
-      <div className="stat-grid" style={{marginTop:16}}><div className="stat"><span>總件數</span><strong>{form.cargo.length === 0 ? '未提供' : weights?.pieces ?? '—'}</strong></div><div className="stat"><span>實際總重 Gross</span><strong>{form.cargo.length === 0 ? '未提供' : `${curr(weights?.grossWeight)} kg`}</strong></div><div className="stat"><span>體積 CBM</span><strong>{form.cargo.length === 0 ? '未提供' : curr(weights?.cbm)}</strong></div>{!isSea && <><div className="stat"><span>材積重量 Volume</span><strong>{curr(weights?.volumeWeight)} kg</strong></div><div className="stat"><span>計費重量 Chargeable</span><strong>{curr(weights?.chargeableWeight)} kg</strong></div></>}</div>
+      <div className="stat-grid" style={{marginTop:16}}><div className="stat"><span>總件數</span><strong>{form.cargo.length === 0 ? '未提供' : weights?.pieces ?? '—'}</strong></div><div className="stat"><span>實際總重 Gross</span><strong>{form.cargo.length === 0 ? '未提供' : `${curr(weights?.grossWeight)} kg`}</strong></div><div className="stat"><span>體積 CBM</span><strong>{form.cargo.length === 0 ? '未提供' : curr(weights?.cbm)}</strong></div>{!isSea && <><div className="stat"><span>材積重量 Volume</span><strong>{formatVolumeWeight(weights?.volumeWeight)} kg</strong></div><div className="stat"><span>計費重量 Chargeable</span><strong>{curr(weights?.chargeableWeight)} kg</strong></div></>}</div>
     </section>
     <section className="panel">
       <h3 className="section-title">3. 客戶合約與應收費用</h3>
@@ -231,11 +235,19 @@ export default function QuoteEditor({ customers, settings, initial, onSaved }: {
       <datalist id="cost-names">{['Carrier Freight Cost','Fuel Cost','Security Cost','Terminal Cost','AWB / B/L Cost','Documentation Cost','Trucking Cost','Container Cost','Other Costs'].map(name=><option key={name} value={name}/>)}</datalist>
       <button type="button" className="btn btn-secondary" onClick={()=>change('costs',[...form.costs,{name:'',amount:null,currency:form.analysisCurrency,status:'ESTIMATED'}])}>＋ 新增成本項目</button>
       <label style={{display:'flex',gap:8,margin:'16px 0',alignItems:'center'}}><input type="checkbox" checked={form.costsComplete} onChange={e=>change('costsComplete',e.target.checked)}/>我已確認本次所有成本項目完整（仍有空白金額時將維持不完整）</label>
-      <div className="form-grid"><label className="field">分析幣別<select value={form.analysisCurrency} onChange={e=>change('analysisCurrency',e.target.value as Currency)}><option>USD</option><option>TWD</option></select></label><label className="field">匯率：1 USD = ? TWD<input type="number" min="0" step="any" placeholder="跨幣別分析時必填" value={form.fxRate} onChange={e=>change('fxRate',e.target.value)}/></label><label className="field">匯率使用日期<input type="date" value={form.fxDate} onChange={e=>change('fxDate',e.target.value)}/></label></div>
+      <div className="form-grid">
+        <label className="field">分析幣別<select value={form.analysisCurrency} onChange={e=>change('analysisCurrency',e.target.value as Currency)}><option>USD</option><option>TWD</option></select></label>
+        <label className="field">匯率來源<select value={form.fxSource ?? 'MANUAL'} onChange={e=>update({fxSource:e.target.value as FxSource,customsRate:undefined})}><option value="CUSTOMS">海關三旬匯率</option><option value="MANUAL">手動輸入</option></select></label>
+        <label className="field">匯率：1 USD = ? TWD<input readOnly={customsFx} type="number" min="0" step="any" placeholder="跨幣別分析時必填" value={form.fxRate} onChange={e=>change('fxRate',e.target.value)}/></label>
+        <label className="field">匯率使用日期<input readOnly={customsFx} type="date" value={customsFx ? form.shipmentDate : form.fxDate} onChange={e=>change('fxDate',e.target.value)}/></label>
+      </div>
+      {customsFx && <CustomsRatePicker date={form.shipmentDate} side={form.customsRateSide ?? 'EXPORT'} onSideChange={side=>update({customsRateSide:side,customsRate:undefined})} onLoaded={rate=>update({fxRate:rate.rate,fxDate:rate.date,customsRate:rate})} onStatusChange={status=>{setFxStatus(status);if(status!=='ready'){revision.current++;setSnapshot(null);}}} />}
+      {customsFx && <p className="muted">依出貨日取得適用旬別。官方目前公告未涵蓋該日或連線失敗時，可切換手動輸入；儲存時會保存本次匯率、類別與適用期間。</p>}
     </section>
     <section className="panel"><h3 className="section-title">5. 報價條件</h3><div className="form-grid"><label className="field">本次報價條件 Terms and Conditions<textarea rows={4} value={form.terms} onChange={e=>change('terms',e.target.value)}/></label><label className="field">備註 Remarks<textarea rows={4} value={form.remarks} onChange={e=>change('remarks',e.target.value)}/></label></div><p className="muted">報價條件由使用者自行確認。儲存時保留本次輸入、合約版本、原價及調整價的完整快照。</p></section>
-    <div style={{display:'flex',gap:12,alignItems:'center',margin:'20px 0'}}><button type="button" className="btn" disabled={!canCalculate||busy!==null} onClick={preview}>{busy==='preview'?'正在試算…':'試算報價'}</button><button type="button" className="btn" disabled={!snapshot||busy!==null||Boolean(savedNumber)} onClick={save}>{busy==='save'?'正在儲存…':'儲存報價快照'}</button>{!canCalculate&&<span className="muted">請完成運輸條件、{isFcl?'正整數貨櫃數量':'完整貨物資料'}及合約選擇或非合約售價。</span>}</div>
+    <div style={{display:'flex',gap:12,alignItems:'center',margin:'20px 0'}}><button type="button" className="btn" disabled={!canCalculate||busy!==null} onClick={preview}>{busy==='preview'?'正在試算…':'試算報價'}</button><button type="button" className="btn" disabled={!snapshot||busy!==null||Boolean(savedNumber)||!customsReady} onClick={save}>{busy==='save'?'正在儲存…':'儲存報價快照'}</button>{!canCalculate&&<span className="muted">請完成運輸條件、{isFcl?'正整數貨櫃數量':'完整貨物資料'}及合約選擇或非合約售價。</span>}</div>
     {snapshot && <section className="panel"><h3 className="section-title">報價試算結果</h3><p>{modeName(snapshot.input.transportMode)} · {routeLabel(snapshot.input)}{snapshot.input.transportMode==='SEA' && ` · ${snapshot.input.seaShipmentType}${snapshot.input.containerType ? ` · ${snapshot.input.containerType}` : ''}`}</p><p>基本運費：<strong>{snapshot.freight.currency} {curr(snapshot.freight.amount)}</strong>{snapshot.freight.basis && ` · ${freightBasisLabels[snapshot.freight.basis]}`}{snapshot.freight.quantity !== undefined && ` · 計價數量 ${curr(snapshot.freight.quantity)} ${snapshot.freight.unit==='CONTAINER'?'櫃':snapshot.freight.unit ?? ''}`} · 適用級距 {snapshot.freight.appliedBreak}{snapshot.freight.minimumApplied?' · 已套用最低收費':''}</p>
+      {snapshot.input.fxRate && <p>匯率：1 USD = {snapshot.input.fxRate} TWD（{snapshot.input.fxDate}）{snapshot.input.fxSource==='CUSTOMS' && snapshot.input.customsRate && ` · 海關三旬 ${snapshot.input.customsRate.side==='EXPORT'?'出口／買進':'進口／賣出'} · 適用 ${snapshot.input.customsRate.validFrom} — ${snapshot.input.customsRate.validTo}`}</p>}
       {snapshot.charges.length>0&&<div className="table-wrap"><table><thead><tr><th>應收費用</th><th>原合約單價</th><th>本次單價</th><th>原始金額</th><th>本次金額</th><th>說明</th></tr></thead><tbody>{snapshot.charges.map((charge,i)=><tr key={i}><td>{charge.name}</td><td>{charge.currency} {curr(charge.originalRate || undefined)}</td><td>{charge.currency} {curr(charge.appliedRate || undefined)}</td><td>{charge.currency} {curr(charge.originalAmount)}</td><td>{charge.currency} {curr(charge.amount)}</td><td>{charge.included?'已包含':charge.temporary?'臨時費用':'合約附加費'}{charge.basis==='PER_KG_TIERED' && <small>{charge.appliedBreak}{charge.quantity ? ` · ${curr(charge.quantity)} KG` : ''}{charge.minimumApplied?' · 已套用最低收費':''}</small>}</td></tr>)}</tbody></table></div>}
       {snapshot.finance.costState==='MISSING'&&<div className="alert">Cost Not Available — 尚無成本資料，不計算毛利及毛利率。</div>}
       {snapshot.finance.costState==='PARTIAL'&&<div className="alert">成本資料不完整；僅顯示已知成本小計及暫估利潤。</div>}

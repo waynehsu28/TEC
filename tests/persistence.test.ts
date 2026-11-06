@@ -146,10 +146,10 @@ describe('real SQLite persistence and authoritative quotation workflow', () => {
   it('saves exchange rate history and settings without altering earlier quote company snapshots', async () => {
     const a = await api.createCustomer(customerInput); await api.createContract(contractInput(a.id));
     const settings = await api.getSettings();
-    await api.updateSettings({ ...settings, companyName: 'Original Co', exchangeRate: '32.5', exchangeRateDate: '2026-11-05' });
+    await api.updateSettings({ ...settings, companyName: 'Original Co', exchangeRateSource: 'MANUAL', exchangeRate: '32.5', exchangeRateDate: '2026-11-05' });
     const quote = await api.createQuote({ ...quoteInput(a.id), analysisCurrency: 'TWD', fxRate: '32.5', fxDate: '2026-11-05' });
     expect(quote.snapshot.finance.revenue).toBe('58695.00');
-    await api.updateSettings({ ...settings, companyName: 'New Co' });
+    await api.updateSettings({ ...settings, companyName: 'New Co', exchangeRateSource: 'MANUAL' });
     expect((await api.getQuote(quote.id)).snapshot.company.name).toBe('Original Co');
     expect(await client.exchangeRate.count()).toBe(2);
   });

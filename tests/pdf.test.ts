@@ -134,6 +134,18 @@ describe('正式客戶 PDF 與資訊隔離', () => {
     expect(buffer.toString('latin1').match(/\/Type\s*\/Page\b/g)).toHaveLength(1);
   });
 
+  it.skipIf(!extractionAvailable)('prints volume weight to two places without changing the saved measurement or chargeable weight', async () => {
+    const quote = quoteFixture();
+    quote.snapshot.weights.volumeWeight = '15.422833333333333333333333333333';
+    quote.snapshot.weights.chargeableWeight = '15.5';
+    const persisted = JSON.stringify(quote.snapshot);
+    const content = await quoteText(quote);
+    expect(content).toContain('材積重量：15.42KG');
+    expect(content).toContain('ChargeableWeight：15.5KG');
+    expect(content).not.toContain(quote.snapshot.weights.volumeWeight);
+    expect(JSON.stringify(quote.snapshot)).toBe(persisted);
+  });
+
   it.skipIf(!extractionAvailable)('extracts Traditional Chinese and selling prices from actual PDF while excluding all internal costs and profit', async () => {
     const quote = quoteFixture();
     const persistedSnapshot = JSON.stringify(quote.snapshot);

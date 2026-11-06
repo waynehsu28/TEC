@@ -49,6 +49,10 @@ Normal Rate 是未達任何已填級距時的單價；級距門檻使用同一�
 
 確認已含項目與另外收費的明細，再填成本、匯率、條款及報價效期。成本未知時可以保留未知狀態，系統不會當成實際零成本。保存後可在歷史報價下載 PDF；客戶 PDF 不包含內部成本與毛利。
 
+匯率來源沿用 Settings：預設海關三旬／出口（買進），可切換進口（賣出）或明確選手動。自動取率須符合出貨日所在的官方當期適用期間；日期超出、尚未公告或連線失敗時會提示，不沿用過期值。預覽與儲存由伺服器核定，快照保存匯率來源與適用期間；欄位選擇及連線限制見 [海關匯率說明](customs-exchange-rates.md)。
+
+空運材積重量在報價、歷史與 PDF 顯示兩位小數，但計費重量與級距仍以未截斷值計算。海運 CBM 不因這項顯示調整而改為兩位小數。
+
 ## Demo 計算範例
 
 下表的價格全為說明用的虛構 Demo，不是實際台美運價，也不會自動建立於資料庫。假設沒有級距、MIN 或另收費用：
@@ -66,6 +70,8 @@ Normal Rate 是未達任何已填級距時的單價；級距門檻使用同一�
 更新前先停止所有使用 SQLite 的程序並備份資料庫，再執行 `npm run db:setup` 套用 migration。Codespaces 的停止、備份、更新及重啟步驟見 [README](../README.md#codespaces在-github-瀏覽器操作)，詳細資料保存方式見 [Codespaces 操作說明](codespaces.md#資料保存與備份)。不要使用刪除資料庫或 `migrate reset` 更新正式資料。
 
 Trucking 重量級距使用新增的 `20261105000300_tiered_charge_rates` migration，保存合約費用級距及報價套用紀錄。既有 Codespace 依上述說明停止服務、備份、`git pull --ff-only origin main`、`npm ci --ignore-scripts` 後執行 `npm run codespaces:start`，啟動流程會自動套用 migration；請保留原資料庫。
+
+海關匯率的 `20261105000400_customs_exchange_rates` migration 在 Settings 追加來源及類別欄位，預設 `CUSTOMS`／`EXPORT`，不覆寫原有報價快照。依相同更新流程套用；既有報價與草稿缺少來源時維持手動語意。
 
 既有合約保留為 AIR／AIRPORT；系統不會把 TPE、LAX 等機場代碼推測轉成國家。若要採用國家價，請建立明確選取國家的合約。舊報價快照不改寫；新報價保存當時的運輸方式、國家、海運類型／櫃型、計價單位與數量，後續改價不會回算已保存的報價。
 

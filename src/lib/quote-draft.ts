@@ -22,6 +22,13 @@ export function isQuoteDraftInput(value: unknown): value is QuoteInput {
     || !oneOf(value.status, ['Draft', 'Quoted', 'Accepted', 'Rejected', 'Expired'])
     || !(value.revisionOfId === null || text(value.revisionOfId, 100)) || !(value.contractVersionId === null || text(value.contractVersionId, 100))) return false;
   if (value.transportMode !== undefined && !oneOf(value.transportMode, ['AIR', 'SEA'])) return false;
+  if (value.fxSource !== undefined && !oneOf(value.fxSource, ['CUSTOMS', 'MANUAL'])) return false;
+  if (value.customsRateSide !== undefined && !oneOf(value.customsRateSide, ['EXPORT', 'IMPORT'])) return false;
+  if (value.customsRate !== undefined) {
+    const rate = value.customsRate;
+    if (!record(rate) || rate.currency !== 'USD' || !oneOf(rate.side, ['EXPORT', 'IMPORT']) || !money(rate.rate)
+      || !text(rate.date, 10) || !text(rate.validFrom, 10) || !text(rate.validTo, 10) || !text(rate.sourceUrl, 500) || !text(rate.fetchedAt, 64)) return false;
+  }
   if (value.routeScope !== undefined && !oneOf(value.routeScope, ['AIRPORT', 'COUNTRY'])) return false;
   if (value.seaShipmentType !== undefined && !oneOf(value.seaShipmentType, ['', 'LCL', 'FCL'])) return false;
   if (value.containerType !== undefined && !oneOf(value.containerType, ['', '20GP', '40GP', '40HQ'])) return false;

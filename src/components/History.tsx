@@ -2,7 +2,7 @@
 import { useState } from 'react';
 import type { Customer, QuoteRecord, QuoteStatus, QuoteSnapshot } from '@/lib/types';
 import { Badge, Empty, money } from './ui';
-import { modeName, routeLabel, chargeBasisLabels, formatQuantity } from '@/lib/transport';
+import { modeName, routeLabel, chargeBasisLabels, formatQuantity, formatVolumeWeight } from '@/lib/transport';
 const statuses: QuoteStatus[] = ['Draft', 'Quoted', 'Accepted', 'Rejected', 'Expired'];
 export function SnapshotDetails({ snapshot: s }: { snapshot: QuoteSnapshot }) {
   const sea = s.input.transportMode === 'SEA';
@@ -16,12 +16,12 @@ export function SnapshotDetails({ snapshot: s }: { snapshot: QuoteSnapshot }) {
       <div><span>承運人 / 服務</span><strong>{s.input.airline || '不限'} / {s.input.serviceType || '不限'}</strong></div>
       <div><span>出貨日期 / 貨物種類</span><strong>{s.input.shipmentDate} / {s.input.commodity || '—'}</strong></div>
       <div><span>合約 / 適用級距</span><strong>{s.contract ? `${s.contract.number} v${s.contract.version}` : '非合約手動售價'} · {s.freight.appliedBreak}</strong></div>
-      <div><span>匯率快照</span><strong>{s.input.fxRate ? `1 USD = ${s.input.fxRate} TWD (${s.input.fxDate})` : '未設定'}</strong></div>
+      <div><span>匯率快照</span><strong>{s.input.fxRate ? `1 USD = ${s.input.fxRate} TWD (${s.input.fxDate})` : '未設定'}</strong>{s.input.fxSource === 'CUSTOMS' && s.input.customsRate && <small>海關三旬 · {s.input.customsRate.side === 'EXPORT' ? '出口／買進' : '進口／賣出'} · {s.input.customsRate.validFrom} — {s.input.customsRate.validTo}</small>}</div>
       {sea && s.input.seaShipmentType === 'FCL' && <div><span>整櫃 FCL</span><strong>{s.input.containerType} × {s.input.containerCount} 櫃</strong></div>}
     </div>
     <div className="stat-grid">
       <div className="stat"><span>總實重 Gross Weight</span><strong>{cargoProvided ? formatQuantity(s.weights.grossWeight) : '未提供'} <em>{cargoProvided ? 'KG' : ''}</em></strong></div>
-      {!sea && <><div className="stat"><span>材積重 Volume Weight</span><strong>{formatQuantity(s.weights.volumeWeight)} <em>KG</em></strong></div><div className="stat"><span>計費重 Chargeable Weight</span><strong>{formatQuantity(s.weights.chargeableWeight)} <em>KG</em></strong></div></>}
+      {!sea && <><div className="stat"><span>材積重 Volume Weight</span><strong>{formatVolumeWeight(s.weights.volumeWeight)} <em>KG</em></strong></div><div className="stat"><span>計費重 Chargeable Weight</span><strong>{formatQuantity(s.weights.chargeableWeight)} <em>KG</em></strong></div></>}
       <div className="stat"><span>體積 Volume</span><strong>{cargoProvided ? formatQuantity(s.weights.cbm) : '未提供'} <em>{cargoProvided ? 'CBM' : ''}</em></strong></div>
       <div className="stat"><span>計價數量</span><strong>{s.freight.quantity !== undefined ? `${s.freight.quantity} ${s.freight.unit === 'CONTAINER' ? '櫃' : s.freight.unit}` : s.freight.appliedBreak === 'MANUAL' ? '手動整票金額' : `${formatQuantity(s.weights.chargeableWeight)} KG`}</strong></div>
     </div>

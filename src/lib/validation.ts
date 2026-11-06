@@ -7,6 +7,8 @@ const text = z.string().trim().max(2000);
 const shortText = z.string().trim().max(120);
 const identifier = z.string().trim().min(1).max(100);
 export const currencySchema = z.enum(['USD', 'TWD']);
+export const fxSourceSchema = z.enum(['CUSTOMS', 'MANUAL']);
+export const customsRateSideSchema = z.enum(['EXPORT', 'IMPORT']);
 export const quoteStatusSchema = z.enum(['Draft', 'Quoted', 'Accepted', 'Rejected', 'Expired']);
 export const dateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, '日期格式須為 YYYY-MM-DD').refine((s) => {
   const parsed = new Date(`${s}T00:00:00.000Z`);
@@ -97,8 +99,9 @@ export const settingsSchema = z.object({
   companyName: shortText, companyLogo: z.string().max(1_398_130).refine(validCompanyLogo, 'Logo 須為有效 PNG/JPEG，最大 1MB、4096px 且最多 400 萬像素'),
   volumeDivisor: positiveDecimal, weightIncrement: positiveDecimal, defaultCurrency: currencySchema,
   exchangeRate: optionalPositiveDecimal, exchangeRateDate: z.union([dateSchema, z.literal('')]), terms: z.string().trim().max(10000),
+  exchangeRateSource: fxSourceSchema.optional(), customsRateSide: customsRateSideSchema.optional(),
 }).superRefine((input, ctx) => {
-  if (input.exchangeRate && !input.exchangeRateDate) ctx.addIssue({ code: 'custom', path: ['exchangeRateDate'], message: '設定匯率時須記錄日期' });
+  if (input.exchangeRateSource !== 'CUSTOMS' && input.exchangeRate && !input.exchangeRateDate) ctx.addIssue({ code: 'custom', path: ['exchangeRateDate'], message: '設定匯率時須記錄日期' });
 });
 const matchBase = z.object({
   customerId: identifier, ...routingShape, airline: shortText,
@@ -118,6 +121,7 @@ export const quoteSchema = matchBase.extend({
   costs: z.array(z.object({ name: shortText.min(1), amount: decimalSchema.nullable(), currency: currencySchema, status: z.enum(['ESTIMATED', 'ACTUAL']) })).max(100),
   costsComplete: z.boolean(), analysisCurrency: currencySchema, fxRate: optionalPositiveDecimal,
   fxDate: z.union([dateSchema, z.literal('')]), validity: dateSchema, remarks: text, terms: z.string().trim().max(10000),
+  fxSource: fxSourceSchema.default('MANUAL'), customsRateSide: customsRateSideSchema.optional(),
   status: quoteStatusSchema, revisionOfId: identifier.nullable(),
 }).superRefine((input, ctx) => {
   validateRouting(input, ctx);
@@ -127,7 +131,7 @@ export const quoteSchema = matchBase.extend({
   if (!isFcl && input.cargo.length === 0) ctx.addIssue({ code: 'custom', path: ['cargo'], message: '空運與海運散貨請至少輸入一組貨物' });
   if (!isFcl && input.temporaryCharges.some((charge) => charge.basis === 'PER_CONTAINER')) ctx.addIssue({ code: 'custom', path: ['temporaryCharges'], message: '每櫃附加費僅適用海運整櫃 FCL' });
   if (isFcl && input.cargo.length === 0 && input.temporaryCharges.some((charge) => !charge.included && ['PER_KG', 'PER_KG_TIERED', 'PER_CBM', 'PER_PIECE'].includes(charge.basis))) ctx.addIssue({ code: 'custom', path: ['cargo'], message: '按重量、材積或件數計算附加費時須輸入貨物資料' });
-  if (input.fxRate && !input.fxDate) ctx.addIssue({ code: 'custom', path: ['fxDate'], message: '使用匯率時須記錄日期' });
+  if (input.fxSource !== 'CUSTOMS' && input.fxRate && !input.fxDate) ctx.addIssue({ code: 'custom', path: ['fxDate'], message: '使用匯率時須記錄日期' });
   const ids = input.chargeOverrides.map((c) => c.chargeId);
   if (new Set(ids).size !== ids.length) ctx.addIssue({ code: 'custom', path: ['chargeOverrides'], message: '同一合約費用不得重複調整' });
   if (input.contractVersionId !== null && input.manualFreight !== null) ctx.addIssue({ code: 'custom', path: ['manualFreight'], message: '合約售價與手動售價只能擇一' });

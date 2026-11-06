@@ -1,4 +1,7 @@
 export type Currency = 'USD' | 'TWD';
+export type FxSource = 'CUSTOMS' | 'MANUAL';
+export type CustomsRateSide = 'EXPORT' | 'IMPORT';
+export interface CustomsExchangeRate { currency: 'USD'; date: string; side: CustomsRateSide; rate: string; validFrom: string; validTo: string; sourceUrl: string; fetchedAt: string }
 export type EntityStatus = 'ACTIVE' | 'INACTIVE';
 export type QuoteStatus = 'Draft' | 'Quoted' | 'Accepted' | 'Rejected' | 'Expired';
 export type TransportMode = 'AIR' | 'SEA';
@@ -19,9 +22,9 @@ export interface ContractRecord { id: string; customerId: string; number: string
 export interface ContractCandidate extends ContractVersion { customerId: string; number: string; status: EntityStatus }
 export interface CargoItem { pieces: number; length: string; width: string; height: string; grossWeight: string; weightMode: 'PER_PIECE' | 'GROUP_TOTAL' }
 export interface CostInput { name: string; amount: string | null; currency: Currency; status: 'ESTIMATED' | 'ACTUAL' }
-export interface Settings { companyName: string; companyLogo: string; volumeDivisor: string; weightIncrement: string; defaultCurrency: Currency; exchangeRate: string; exchangeRateDate: string; terms: string }
+export interface Settings { companyName: string; companyLogo: string; volumeDivisor: string; weightIncrement: string; defaultCurrency: Currency; exchangeRate: string; exchangeRateDate: string; exchangeRateSource?: FxSource; customsRateSide?: CustomsRateSide; terms: string }
 export interface MatchInput extends RoutingTerms { customerId: string; origin: string; destination: string; airline: string; serviceType: string; commodity: string; shipmentDate: string }
-export interface QuoteInput extends MatchInput { containerCount?: number; cargo: CargoItem[]; contractVersionId: string | null; manualFreight: { amount: string; currency: Currency } | null; chargeOverrides: { chargeId: string; rate: string; manualAmount?: string }[]; temporaryCharges: ChargeInput[]; costs: CostInput[]; costsComplete: boolean; analysisCurrency: Currency; fxRate: string; fxDate: string; validity: string; remarks: string; terms: string; status: QuoteStatus; revisionOfId: string | null }
+export interface QuoteInput extends MatchInput { containerCount?: number; cargo: CargoItem[]; contractVersionId: string | null; manualFreight: { amount: string; currency: Currency } | null; chargeOverrides: { chargeId: string; rate: string; manualAmount?: string }[]; temporaryCharges: ChargeInput[]; costs: CostInput[]; costsComplete: boolean; analysisCurrency: Currency; fxRate: string; fxDate: string; fxSource?: FxSource; customsRateSide?: CustomsRateSide; customsRate?: CustomsExchangeRate; validity: string; remarks: string; terms: string; status: QuoteStatus; revisionOfId: string | null }
 export interface Weights { pieces: number; grossWeight: string; cbm: string; volumeWeight: string | null; chargeableWeight: string | null; cargoProvided?: boolean }
 export interface FreightResult { basis?: FreightBasis; quantity?: string; unit?: 'KG' | 'CBM' | 'CONTAINER'; amount: string; currency: Currency; rate: string; appliedBreak: string; minimumApplied: boolean }
 export interface CalculatedCharge { name: string; basis: ChargeBasis; currency: Currency; included: boolean; originalRate: string; appliedRate: string; originalAmount: string; amount: string; temporary: boolean; appliedBreak?: string; quantity?: string; minimumApplied?: boolean }

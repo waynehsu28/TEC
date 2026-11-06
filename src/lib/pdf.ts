@@ -2,7 +2,7 @@ import PDFDocument from 'pdfkit';
 import Decimal from 'decimal.js';
 import path from 'node:path';
 import type { Currency, QuoteRecord, QuoteSnapshot } from './types';
-import { chargeBasisLabels, freightBasisLabels, routeLabel } from './transport';
+import { chargeBasisLabels, freightBasisLabels, routeLabel, formatVolumeWeight } from './transport';
 
 /** Deliberate allowlist: never pass an entire quote/snapshot into a PDF template. */
 export function customerPdfData(snapshot: QuoteSnapshot) {
@@ -144,7 +144,7 @@ export async function generateQuotePdf(quote: QuoteRecord): Promise<Buffer> {
           item.weightMode === 'PER_PIECE' ? '單件重量' : '該組總重量'], cargoColumns);
         doc.moveDown(0.6);
         text(`總件數：${data.weights.pieces}    總實重：${data.weights.grossWeight} KG    體積：${data.weights.cbm} CBM`);
-        if (!isSea) text(`材積重量：${data.weights.volumeWeight} KG    計費重量 Chargeable Weight：${data.weights.chargeableWeight} KG`, 11);
+        if (!isSea) text(`材積重量：${formatVolumeWeight(data.weights.volumeWeight)} KG    計費重量 Chargeable Weight：${data.weights.chargeableWeight} KG`, 11);
       } else text('尚未提供貨物尺寸及重量明細。');
       heading('客戶應付費用 Selling Charges');
       const chargeColumns = [222, 115, 55, width - 392];

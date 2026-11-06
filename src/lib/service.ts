@@ -3,7 +3,8 @@ import Decimal from 'decimal.js';
 import { db } from './db';
 import { customerSchema, contractSchema, settingsSchema, quoteSchema, matchSchema } from './validation';
 import { calculateWeights, matchContracts, calculateFreight, calculateCharges, calculateFinance } from './engine';
-import type { Customer, ContractInput, ContractRecord, ContractVersion, ContractCandidate, Settings, MatchInput, QuoteInput, QuoteRecord, QuoteSnapshot, FreightResult } from './types';
+import { getCustomsExchangeRate } from './customs-exchange-rate';
+import type { Customer, ContractInput, ContractRecord, ContractVersion, ContractCandidate, Settings, MatchInput, QuoteInput, QuoteRecord, QuoteSnapshot, FreightResult, CustomsExchangeRate, CustomsRateSide } from './types';
 
 export class ServiceError extends Error {
   constructor(message: string, public status = 400) { super(message); }
@@ -62,7 +63,9 @@ function dateCode(now: Date) {
   return ['year', 'month', 'day'].map(t => parts.find(p => p.type === t)?.value).join('');
 }
 
-export function createService(client: PrismaClient) {
+export interface ServiceDependencies { getCustomsExchangeRate?: (date: string, side: CustomsRateSide) => Promise<CustomsExchangeRate> }
+export function createService(client: PrismaClient, dependencies: ServiceDependencies = {}) {
+  const customsExchangeRate = dependencies.getCustomsExchangeRate ?? getCustomsExchangeRate;
   async function ensureCustomer(customerId: string, active = false) {
     const customer = await client.customer.findUnique({ where: { id: customerId } });
     if (!customer) throw new ServiceError('找不到客戶', 404);
@@ -86,8 +89,14 @@ export function createService(client: PrismaClient) {
     return matchContracts(latest, input);
   }
   async function buildSnapshot(raw: unknown): Promise<QuoteSnapshot> {
-    const input = quoteSchema.parse(raw) as QuoteInput;
+    let input = quoteSchema.parse(raw) as QuoteInput;
     const customer = asCustomer(await ensureCustomer(input.customerId, true));
+    if (input.fxSource === 'CUSTOMS') {
+      // The submitted rate/metadata are display hints only. The saved calculation always
+      // uses the official rate covering this shipment date, selected again on the server.
+      const rate = await customsExchangeRate(input.shipmentDate, input.customsRateSide ?? 'EXPORT');
+      input = { ...input, customsRateSide: rate.side, fxRate: rate.rate, fxDate: rate.date, customsRate: rate };
+    }
     const settings = await getSettings();
     const weights = calculateWeights(input.cargo, settings, input.transportMode ?? 'AIR');
     const matches = await candidates(input);
@@ -117,8 +126,16 @@ export function createService(client: PrismaClient) {
   }
   return {
     getSettings,
+    getCustomsExchangeRate: customsExchangeRate,
     async updateSettings(raw: unknown): Promise<Settings> {
-      const input = settingsSchema.parse(raw) as Settings;
+      const parsed = settingsSchema.parse(raw) as Settings;
+      const input: Settings = { ...parsed, exchangeRateSource: parsed.exchangeRateSource ?? 'MANUAL', customsRateSide: parsed.customsRateSide ?? 'EXPORT' };
+      if (input.exchangeRateSource === 'CUSTOMS') {
+        const date = input.exchangeRateDate || new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Taipei' });
+        const rate = await customsExchangeRate(date, input.customsRateSide ?? 'EXPORT');
+        input.exchangeRate = rate.rate;
+        input.exchangeRateDate = rate.date;
+      }
       return client.$transaction(async tx => {
         const { id: _id, ...settings } = await tx.settings.upsert({ where: { id: 1 }, create: { ...input, id: 1 }, update: input });
         if (input.exchangeRate) await tx.exchangeRate.create({ data: { usdToTwd: input.exchangeRate, rateDate: input.exchangeRateDate } });

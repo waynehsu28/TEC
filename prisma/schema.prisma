@@ -197,6 +197,8 @@ model Settings {
   defaultCurrency  String @default("USD")
   exchangeRate     String @default("")
   exchangeRateDate String @default("")
+  exchangeRateSource String @default("CUSTOMS")
+  customsRateSide   String @default("EXPORT")
   terms            String @default("")
 }
 model ExchangeRate {

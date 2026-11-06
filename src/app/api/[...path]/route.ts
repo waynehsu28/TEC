@@ -3,6 +3,8 @@ import { Prisma } from '@prisma/client';
 import { ZodError } from 'zod';
 import { service, ServiceError } from '@/lib/service';
 import { getRequestAccessError } from '@/lib/request-access';
+import { dateSchema, customsRateSideSchema } from '@/lib/validation';
+import { CustomsRateError } from '@/lib/customs-exchange-rate';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 async function handler(req: NextRequest, context: { params: Promise<{ path: string[] }> }) {
@@ -36,6 +38,10 @@ async function handler(req: NextRequest, context: { params: Promise<{ path: stri
       if (req.method === 'GET') result = await service.getSettings();
       else if (req.method === 'PUT') result = await service.updateSettings(body);
       else throw new ServiceError('不支援此操作', 405);
+    } else if (resource === 'customs-exchange-rate' && req.method === 'GET' && !id) {
+      const date = dateSchema.parse(req.nextUrl.searchParams.get('date') ?? '');
+      const side = customsRateSideSchema.parse(req.nextUrl.searchParams.get('side') ?? 'EXPORT');
+      result = await service.getCustomsExchangeRate(date, side);
     } else if (resource === 'match' && req.method === 'POST' && !id) result = await service.match(body);
     else if (resource === 'preview' && req.method === 'POST' && !id) result = await service.preview(body);
     else if (resource === 'quotes') {
@@ -46,6 +52,7 @@ async function handler(req: NextRequest, context: { params: Promise<{ path: stri
     return NextResponse.json(result, { status: req.method === 'POST' && (resource === 'customers' || resource === 'contracts' || resource === 'quotes') ? 201 : 200 });
   } catch (error) {
     if (error instanceof ZodError) return NextResponse.json({ error: error.issues.map(e => `${e.path.join('.')}: ${e.message}`).join('；') }, { status: 400 });
+    if (error instanceof CustomsRateError) return NextResponse.json({ error: error.message }, { status: error.status });
     if (error instanceof ServiceError) return NextResponse.json({ error: error.message }, { status: error.status });
     if (error instanceof Prisma.PrismaClientKnownRequestError) {
       if (error.code === 'P2002') return NextResponse.json({ error: '代碼、合約編號或版本已存在，請重新確認。' }, { status: 409 });

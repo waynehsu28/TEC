@@ -18,7 +18,7 @@ const modules: { id: WorkspaceModule; label: string; en: string; icon: string; d
   { id: 'contracts', label: '合約運價', en: 'Contract Rates', icon: '▤', description: '維護客戶海空運國家價、計價單位、級距與附加費' },
   { id: 'quote', label: '新增報價', en: 'New Quotation', icon: '＋', description: '空運 KG、海運 CBM／櫃數與客戶國家價一次確認' },
   { id: 'history', label: '報價紀錄', en: 'Quotation History', icon: '▣', description: '查詢不可覆寫的歷史快照、修訂與正式客戶 PDF' },
-  { id: 'settings', label: '系統設定', en: 'Settings', icon: '⚙', description: '設定公司資訊、重量規則、手動匯率與報價條件' },
+  { id: 'settings', label: '系統設定', en: 'Settings', icon: '⚙', description: '設定公司資訊、重量規則、海關匯率與報價條件' },
 ];
 
 function Dashboard({ customers, contracts, quotes, onNavigate, onQuote }: {
