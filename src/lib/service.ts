@@ -91,6 +91,10 @@ export function createService(client: PrismaClient, dependencies: ServiceDepende
   async function buildSnapshot(raw: unknown): Promise<QuoteSnapshot> {
     let input = quoteSchema.parse(raw) as QuoteInput;
     const customer = asCustomer(await ensureCustomer(input.customerId, true));
+    if (input.revisionOfId) {
+      const previous = await client.quote.findFirst({ where: { id: input.revisionOfId, deletedAt: null }, select: { id: true } });
+      if (!previous) throw new ServiceError('找不到原始報價', 404);
+    }
     if (input.fxSource === 'CUSTOMS') {
       // The submitted rate/metadata are display hints only. The saved calculation always
       // uses the official rate covering this shipment date, selected again on the server.
@@ -174,12 +178,19 @@ export function createService(client: PrismaClient, dependencies: ServiceDepende
     async match(raw: unknown): Promise<ContractCandidate[]> { return candidates(matchSchema.parse(raw) as MatchInput); },
     preview: buildSnapshot,
     async getQuotes(): Promise<QuoteRecord[]> {
-      return (await client.quote.findMany({ orderBy: { createdAt: 'desc' } })).map(asQuote);
+      return (await client.quote.findMany({ where: { deletedAt: null }, orderBy: { createdAt: 'desc' } })).map(asQuote);
     },
     async getQuote(id: string): Promise<QuoteRecord> {
-      const row = await client.quote.findUnique({ where: { id } });
+      const row = await client.quote.findFirst({ where: { id, deletedAt: null } });
       if (!row) throw new ServiceError('找不到報價', 404);
       return asQuote(row);
+    },
+    async deleteQuote(id: string): Promise<{ id: string; number: string; revision: number }> {
+      return client.$transaction(async tx => {
+        const updated = await tx.quote.updateMany({ where: { id, deletedAt: null }, data: { deletedAt: new Date() } });
+        if (updated.count === 0) throw new ServiceError('找不到報價', 404);
+        return tx.quote.findUniqueOrThrow({ where: { id }, select: { id: true, number: true, revision: true } });
+      });
     },
     async createQuote(raw: unknown): Promise<QuoteRecord> {
       const snapshot = await buildSnapshot(raw);
@@ -200,11 +211,13 @@ export function createService(client: PrismaClient, dependencies: ServiceDepende
         let number: string;
         if (input.revisionOfId) {
           const previous = await tx.quote.findUnique({ where: { id: input.revisionOfId } });
-          if (!previous) throw new ServiceError('找不到原始報價', 404);
+          if (!previous || previous.deletedAt !== null) throw new ServiceError('找不到原始報價', 404);
           if (previous.customerId !== input.customerId) throw new ServiceError('修訂報價不可變更所屬客戶');
           rootId = previous.rootId ?? previous.id;
           previousQuoteId = previous.id;
           const root = await tx.quote.findUniqueOrThrow({ where: { id: rootId } });
+          // Deleted rows still reserve their revision numbers and the original root remains
+          // the stable family anchor, even when it is no longer visible in history.
           const latest = await tx.quote.findFirst({ where: { OR: [{ id: rootId }, { rootId }] }, orderBy: { revision: 'desc' } });
           revision = (latest?.revision ?? 1) + 1;
           number = `${root.number}-R${String(revision).padStart(3, '0')}`;

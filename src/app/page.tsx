@@ -17,7 +17,7 @@ const modules: { id: WorkspaceModule; label: string; en: string; icon: string; d
   { id: 'customers', label: '客戶資料', en: 'Customers', icon: '◉', description: '維護客戶主檔、聯絡資訊與往來紀錄' },
   { id: 'contracts', label: '合約運價', en: 'Contract Rates', icon: '▤', description: '維護客戶海空運國家價、計價單位、級距與附加費' },
   { id: 'quote', label: '新增報價', en: 'New Quotation', icon: '＋', description: '空運 KG、海運 CBM／櫃數與客戶國家價一次確認' },
-  { id: 'history', label: '報價紀錄', en: 'Quotation History', icon: '▣', description: '查詢不可覆寫的歷史快照、修訂與正式客戶 PDF' },
+  { id: 'history', label: '報價紀錄', en: 'Quotation History', icon: '▣', description: '查詢歷史快照、建立修訂、下載 PDF 與刪除報價' },
   { id: 'settings', label: '系統設定', en: 'Settings', icon: '⚙', description: '設定公司資訊、重量規則、海關匯率與報價條件' },
 ];
 
@@ -102,6 +102,16 @@ export default function Home() {
     setCustomers(current => [customer, ...current.filter(item => item.id !== customer.id)]);
   }, []);
 
+  const handleQuoteDeleted = useCallback((id: string) => {
+    if (!mounted.current) return;
+    // An acknowledged deletion wins over reads that began before the write.
+    refreshGeneration.current++;
+    setQuotes(current => current.filter(quote => quote.id !== id));
+    const current = getCurrentRoute();
+    setNotice(current.module === 'history' ? '' : '報價已刪除。');
+    if (current.module === 'history' && current.quoteId === id) navigate({ ...current, quoteId: null });
+  }, [getCurrentRoute, navigate]);
+
   function goToModule(module: WorkspaceModule) { setNotice(''); navigate({ module }); }
   function openCustomer(id: string, module: 'contracts' | 'history') { setNotice(''); navigate({ module, customerId: id }); }
   function revise(quote: QuoteRecord) { setNotice(''); navigate({ module: 'quote', revisionId: quote.id }); }
@@ -150,7 +160,7 @@ export default function Home() {
           {route.module === 'quote' && (missingRevision
             ? <section className="panel" role="alert"><h2>找不到要修訂的報價</h2><p>原報價可能尚未載入或已不存在。請回報價紀錄重新選擇，不會建立成另一份新報價。</p><button type="button" className="btn-secondary" onClick={() => goToModule('history')}>前往報價紀錄</button></section>
             : <QuoteEditor key={route.revisionId ?? 'new'} customers={customers} settings={settings} initial={revision} onSaved={quote => { void handleQuoteSaved(quote, token, quoteOriginContext); }} />)}
-          {route.module === 'history' && <History quotes={quotes} customers={customers} customerFilter={route.customerId ?? ''} onFilter={id => navigate({ module: 'history', customerId: id || null })} onRevise={revise} selectedId={route.quoteId} onSelect={id => navigate({ ...route, quoteId: id })} />}
+          {route.module === 'history' && <History quotes={quotes} customers={customers} customerFilter={route.customerId ?? ''} onFilter={id => navigate({ module: 'history', customerId: id || null })} onRevise={revise} selectedId={route.quoteId} onSelect={id => navigate({ ...route, quoteId: id })} onDeleted={handleQuoteDeleted} onChanged={refresh} />}
         </ModuleBoundary>}
       </main>
       <footer className="main-footer"><span>Air & Sea Freight Internal Quotation System</span><span>售價依據客戶合約 · 歷史快照獨立保存</span></footer>

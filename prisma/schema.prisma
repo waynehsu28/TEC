@@ -129,7 +129,9 @@ model Quote {
   revisedBy         QuoteRevision[] @relation("OldRevision")
   exchangeRates     ExchangeRate[]
   createdAt         DateTime @default(now())
+  deletedAt         DateTime?
   @@index([customerId, createdAt])
+  @@index([deletedAt, createdAt])
   @@index([rootId, revision])
   @@index([status, createdAt])
   @@map("Quotes")

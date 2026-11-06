@@ -12,7 +12,7 @@
 | Customer Management | 新增、編輯、搜尋、停用、關聯合約與歷史入口 |
 | Customer Contract Rate Management | 航線與費用表格、自訂級距、版本保留、複製、新增航線、過期查詢、停用 |
 | New Quotation | 多組貨物、重量計算、合約匹配與候選確認、費用調整、手動售價、成本與毛利預覽、交易保存 |
-| Quotation History | 查詢、快照明細、建立修訂、客戶 PDF 下載 |
+| Quotation History | 查詢、快照明細、建立修訂、客戶 PDF 下載、單筆刪除與確認 |
 | Settings | 公司資訊、Logo、材積除數、進位單位、手動匯率與日期、自填條款 |
 
 資料庫使用 Prisma 6.19 官方 LibSQL adapter 存取本機 SQLite。Client engine 已正式提供，migration CLI 的 JavaScript adapter 介面仍為 experimental；應固定依賴版本並在資料庫副本驗證升級。
@@ -190,6 +190,21 @@ PDF 在模擬代理下實際回應 200／有效 PDF，另以本機 HTTP 的真�
 `pdftotext` 確認實際 PDF 包含 `材積重量：15.42 KG` 與計費重量 `15.5 KG`；`pdfinfo` 確認一頁。測試資料沒有寫入正式工作資料庫。
 
 官方海關網域目前仍受本開發環境的出口網路白名單限制；已儲存允許 `portal.sw.nat.gov.tw` 的環境草稿，尚待儲存／發布後才能完成官方實連驗證。此限制不代表使用者自己的 GitHub Codespace 也被阻擋。資料形狀與可重跑步驟見 [海關匯率說明](customs-exchange-rates.md)。
+
+## 報價紀錄刪除驗證（2026-11-06）
+
+報價清單與明細新增單筆刪除，確認畫面顯示編號、版本與客戶；可取消或按 Escape。確認後鎖定重複送出，成功即移除該筆、關閉已刪明細與網址選取、同步營運總覽數量。後續讀取失敗會單獨提示，重試只重新讀取，不再送出刪除。
+
+完整回歸為 **254 passed、0 failed、0 skipped**，共 26 個測試檔；型別檢查與 production build 通過。新增 SQLite 6、API 7、History UI 8、Home 整合 3 項，涵蓋修訂編號、原始快照與關聯保留、舊資料庫升級、刪除／取率競態、無 body DELETE、來源限制、確認取消、連點防護、同步失敗、舊讀取不復活已刪紀錄及背景回應不導頁。
+
+Chromium 使用獨立暫存 SQLite，透過本機模擬 Codespaces HTTPS 代理實際操作 production server：
+
+- 建立一筆 Demo 原報價與 R002、R003；刪除前確認資訊與取消操作正確，取消不發出 DELETE。
+- 刪除原報價後，故意讓合約同步回應 500，報價列、明細與 PDF 下載按鈕仍立即移除，客戶篩選保留、網址清除已刪選取，總覽數量由三筆降為兩筆。
+- 已刪明細／PDF 回應 404，尚存 R002 的 PDF 維持 200。刪 R003 後，沿 R002 新建修訂得到 R004，沒有重用已刪版本編號。
+- SQLite 以 `deletedAt` 標記刪除；原始 snapshot 字串、貨物、附加費、成本、匯率及修訂關聯保留，外鍵檢查通過。重載仍不顯示已刪資料，無瀏覽器 JavaScript 錯誤。
+
+migration `20261106000500_quote_soft_delete` 為追加式欄位及索引，沒有對正式工作資料執行刪除。畫面不提供復原操作。本次未直接操作真正的 GitHub Codespace；平台更新後須重啟預覽才會載入新按鈕及 API。
 
 ## 第一版未納入
 

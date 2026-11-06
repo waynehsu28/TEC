@@ -11,12 +11,13 @@ async function handler(req: NextRequest, context: { params: Promise<{ path: stri
   try {
     const accessError = getRequestAccessError(req.headers, req.method);
     if (accessError) throw new ServiceError(accessError, 403);
-    const write = req.method !== 'GET';
+    const requiresBody = req.method === 'POST' || req.method === 'PUT';
     const { path } = await context.params;
     const [resource, id] = path;
     if (path.length > 2) throw new ServiceError('找不到此 API', 404);
+    if (req.method === 'DELETE' && (resource !== 'quotes' || !id)) throw new ServiceError('不支援此操作', 405);
     let body: unknown;
-    if (write) {
+    if (requiresBody) {
       const declared = Number(req.headers.get('content-length') ?? '0');
       if (!Number.isFinite(declared) || declared > 4_000_000) throw new ServiceError('資料超過大小限制', 413);
       const text = await req.text();
@@ -47,6 +48,7 @@ async function handler(req: NextRequest, context: { params: Promise<{ path: stri
     else if (resource === 'quotes') {
       if (req.method === 'GET') result = id ? await service.getQuote(id) : await service.getQuotes();
       else if (req.method === 'POST' && !id) result = await service.createQuote(body);
+      else if (req.method === 'DELETE' && id) result = await service.deleteQuote(id);
       else throw new ServiceError('不支援此操作', 405);
     } else throw new ServiceError('找不到此 API', 404);
     return NextResponse.json(result, { status: req.method === 'POST' && (resource === 'customers' || resource === 'contracts' || resource === 'quotes') ? 201 : 200 });
@@ -64,4 +66,4 @@ async function handler(req: NextRequest, context: { params: Promise<{ path: stri
     return NextResponse.json({ error: '資料庫操作失敗，請確認已執行 npm run db:setup。' }, { status: 500 });
   }
 }
-export { handler as GET, handler as POST, handler as PUT };
+export { handler as GET, handler as POST, handler as PUT, handler as DELETE };
