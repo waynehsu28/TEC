@@ -5,7 +5,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import Home from '../src/app/page';
 import Customers from '../src/components/Customers';
 import type { Customer } from '../src/lib/types';
-import { uiCustomer, uiSettings } from './fixtures/quotation';
+import { quoteOverview, uiCustomer, uiSettings } from './fixtures/quotation';
 
 const created: Customer = { ...uiCustomer, id: 'new-customer', code: 'NEW', name: '新建立的客戶' };
 const response = (data: unknown, status = 200) => new Response(JSON.stringify(data), {
@@ -150,7 +150,7 @@ describe('customer saving in the workspace', () => {
       if (path === '/api/customers' && init?.method === 'POST') { saved = true; return response(created, 201); }
       if (path === '/api/customers') return response(saved ? [uiCustomer, created] : [uiCustomer]);
       if (path === '/api/contracts') return saved ? response({ error: 'CONTRACTS_RELOAD_FAILED' }, 500) : response([]);
-      if (path === '/api/quotes') return response([]);
+      if (path === '/api/quotes/overview') return response(quoteOverview());
       if (path === '/api/settings') return response(uiSettings);
       throw new Error(`Unexpected test request: ${path}`);
     });
@@ -185,7 +185,7 @@ describe('customer saving in the workspace', () => {
       }
       if (path === '/api/customers') return response([uiCustomer]);
       if (path === '/api/contracts') return saved ? response({ error: 'BACKGROUND_REFRESH_FAILED' }, 500) : response([]);
-      if (path === '/api/quotes') return response([]);
+      if (path === '/api/quotes/overview') return response(quoteOverview());
       if (path === '/api/settings') return response(uiSettings);
       throw new Error(`Unexpected test request: ${path}`);
     }));

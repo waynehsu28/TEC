@@ -5,6 +5,7 @@ import { service, ServiceError } from '@/lib/service';
 import { getRequestAccessError } from '@/lib/request-access';
 import { dateSchema, customsRateSideSchema } from '@/lib/validation';
 import { CustomsRateError } from '@/lib/customs-exchange-rate';
+import { parseQuoteListQuery } from '@/lib/quote-list-query';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 async function handler(req: NextRequest, context: { params: Promise<{ path: string[] }> }) {
@@ -46,7 +47,13 @@ async function handler(req: NextRequest, context: { params: Promise<{ path: stri
     } else if (resource === 'match' && req.method === 'POST' && !id) result = await service.match(body);
     else if (resource === 'preview' && req.method === 'POST' && !id) result = await service.preview(body);
     else if (resource === 'quotes') {
-      if (req.method === 'GET') result = id ? await service.getQuote(id) : await service.getQuotes();
+      if (req.method === 'GET' && id === 'overview') result = await service.getQuoteOverview();
+      else if (req.method === 'GET' && id) result = await service.getQuote(id);
+      else if (req.method === 'GET') {
+        const parameters = req.nextUrl.searchParams;
+        if (new Set(parameters.keys()).size !== parameters.size) throw new ServiceError('查詢參數不得重複', 400);
+        result = await service.listQuotes(parseQuoteListQuery(Object.fromEntries(parameters)));
+      }
       else if (req.method === 'POST' && !id) result = await service.createQuote(body);
       else if (req.method === 'DELETE' && id) result = await service.deleteQuote(id);
       else throw new ServiceError('不支援此操作', 405);

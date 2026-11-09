@@ -4,7 +4,10 @@ import { db } from './db';
 import { customerSchema, contractSchema, settingsSchema, quoteSchema, matchSchema } from './validation';
 import { calculateWeights, matchContracts, calculateFreight, calculateCharges, calculateFinance } from './engine';
 import { getCustomsExchangeRate } from './customs-exchange-rate';
-import type { Customer, ContractInput, ContractRecord, ContractVersion, ContractCandidate, Settings, MatchInput, QuoteInput, QuoteRecord, QuoteSnapshot, FreightResult, CustomsExchangeRate, CustomsRateSide } from './types';
+import { COUNTRIES } from './countries';
+import { normalizeQuoteSearch, quoteListItemFromRecord, quoteSearchText } from './quote-list';
+import { parseQuoteListQuery } from './quote-list-query';
+import type { Customer, ContractInput, ContractRecord, ContractVersion, ContractCandidate, Settings, MatchInput, QuoteInput, QuoteRecord, QuoteSnapshot, FreightResult, CustomsExchangeRate, CustomsRateSide, QuoteListItem, QuoteListQuery, QuotePage, QuoteOverview } from './types';
 
 export class ServiceError extends Error {
   constructor(message: string, public status = 400) { super(message); }
@@ -40,6 +43,35 @@ function asQuote(row: { id: string; number: string; revision: number; rootId: st
   return { id: row.id, number: row.number, revision: row.revision, rootId: row.rootId, customerId: row.customerId,
     status: row.status as QuoteRecord['status'], createdAt: row.createdAt.toISOString(), snapshot: JSON.parse(row.snapshot) as QuoteSnapshot };
 }
+const quoteSummarySelect = {
+  id: true, number: true, revision: true, rootId: true, customerId: true, status: true, createdAt: true, validity: true,
+  customerName: true, customerCode: true, transportMode: true, routeScope: true, originCountry: true, destinationCountry: true,
+  seaShipmentType: true, containerType: true, origin: true, destination: true, analysisCurrency: true,
+  revenue: true, grossProfit: true, provisional: true, quantity: true, unit: true, appliedBreak: true, chargeableWeight: true,
+} satisfies Prisma.QuoteSelect;
+type QuoteSummaryRow = Prisma.QuoteGetPayload<{ select: typeof quoteSummarySelect }>;
+function asQuoteListItem(row: QuoteSummaryRow): QuoteListItem {
+  return { ...row, status: row.status as QuoteListItem['status'], createdAt: row.createdAt.toISOString(),
+    transportMode: row.transportMode as QuoteListItem['transportMode'], routeScope: row.routeScope as QuoteListItem['routeScope'],
+    seaShipmentType: row.seaShipmentType as QuoteListItem['seaShipmentType'], containerType: row.containerType as QuoteListItem['containerType'],
+    analysisCurrency: row.analysisCurrency as QuoteListItem['analysisCurrency'], unit: row.unit === '' ? null : row.unit as QuoteListItem['unit'] };
+}
+function quoteListWhere(query: QuoteListQuery): Prisma.Sql {
+  const conditions = [Prisma.sql`"deletedAt" IS NULL`];
+  if (query.customerId) conditions.push(Prisma.sql`"customerId" = ${query.customerId}`);
+  if (query.status) conditions.push(Prisma.sql`"status" = ${query.status}`);
+  if (query.transportMode) conditions.push(Prisma.sql`"transportMode" = ${query.transportMode}`);
+  const tokens = normalizeQuoteSearch(query.q).replace(/[→↔]/g, ' ').replace(/(?:->|=>)/g, ' ').split(/\s+/).filter(Boolean);
+  for (const token of tokens) {
+    const countryToken = token.replace(/\(全國適用\)/g, '');
+    const countries = countryToken ? COUNTRIES.filter(country => normalizeQuoteSearch(country.name).includes(countryToken) || country.code.toLowerCase().includes(countryToken)).map(country => country.code) : [];
+    // instr is literal substring search: %, _ and quotes are data, never SQL wildcards/code.
+    conditions.push(countries.length
+      ? Prisma.sql`(instr("searchText", ${token}) > 0 OR "originCountry" IN (${Prisma.join(countries)}) OR "destinationCountry" IN (${Prisma.join(countries)}))`
+      : Prisma.sql`instr("searchText", ${token}) > 0`);
+  }
+  return Prisma.sql`WHERE ${Prisma.join(conditions, ' AND ')}`;
+}
 function routeKey(input: ContractInput) {
   // Preserve the original key for migrated airport contracts. Country rates deliberately
   // exclude optional city/port descriptions so one country price cannot be duplicated by city.
@@ -66,6 +98,21 @@ function dateCode(now: Date) {
 export interface ServiceDependencies { getCustomsExchangeRate?: (date: string, side: CustomsRateSide) => Promise<CustomsExchangeRate> }
 export function createService(client: PrismaClient, dependencies: ServiceDependencies = {}) {
   const customsExchangeRate = dependencies.getCustomsExchangeRate ?? getCustomsExchangeRate;
+  let preparingSearch: Promise<void> | null = null;
+  function prepareQuoteSearch(): Promise<void> {
+    if (preparingSearch) return preparingSearch;
+    // SQLite lower() only folds ASCII. Upgrade old summaries with the same Unicode
+    // normalization used for new quotes, without loading their large snapshots.
+    preparingSearch = (async () => {
+      for (;;) {
+        const rows = await client.quote.findMany({ where: { searchVersion: 0 }, select: quoteSummarySelect, orderBy: { id: 'asc' }, take: 200 });
+        if (!rows.length) return;
+        const cases = rows.map(row => Prisma.sql`WHEN ${row.id} THEN ${quoteSearchText(asQuoteListItem(row))}`);
+        await client.$executeRaw(Prisma.sql`UPDATE "Quotes" SET "searchText" = CASE "id" ${Prisma.join(cases, ' ')} ELSE "searchText" END, "searchVersion" = 1 WHERE "searchVersion" = 0 AND "id" IN (${Prisma.join(rows.map(row => row.id))})`);
+      }
+    })().finally(() => { preparingSearch = null; });
+    return preparingSearch;
+  }
   async function ensureCustomer(customerId: string, active = false) {
     const customer = await client.customer.findUnique({ where: { id: customerId } });
     if (!customer) throw new ServiceError('找不到客戶', 404);
@@ -78,6 +125,28 @@ export function createService(client: PrismaClient, dependencies: ServiceDepende
   }
   async function getContracts(customerId?: string): Promise<ContractRecord[]> {
     return (await client.contract.findMany({ where: customerId ? { customerId } : {}, include: contractInclude, orderBy: { createdAt: 'desc' } })).map(asContract);
+  }
+  async function listQuotes(raw: unknown = {}): Promise<QuotePage> {
+    const query = parseQuoteListQuery(raw);
+    await prepareQuoteSearch();
+    const where = quoteListWhere(query);
+    return client.$transaction(async tx => {
+      const count = await tx.$queryRaw<{ total: bigint | number }[]>(Prisma.sql`SELECT COUNT(*) AS total FROM "Quotes" ${where}`);
+      const total = Number(count[0].total), totalPages = Math.max(1, Math.ceil(total / query.pageSize));
+      const page = Math.min(query.page, totalPages);
+      const ids = await tx.$queryRaw<{ id: string }[]>(Prisma.sql`SELECT "id" FROM "Quotes" ${where} ORDER BY "createdAt" DESC, "id" DESC LIMIT ${query.pageSize} OFFSET ${(page - 1) * query.pageSize}`);
+      const rows = ids.length ? await tx.quote.findMany({ where: { id: { in: ids.map(item => item.id) } }, select: quoteSummarySelect, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }] }) : [];
+      return { items: rows.map(asQuoteListItem), total, totalPages, page, pageSize: query.pageSize };
+    });
+  }
+  async function getQuoteOverview(): Promise<QuoteOverview> {
+    return client.$transaction(async tx => {
+      const groups = await tx.quote.groupBy({ by: ['status'], where: { deletedAt: null }, _count: { _all: true } });
+      const recent = await tx.quote.findMany({ where: { deletedAt: null }, select: quoteSummarySelect, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take: 6 });
+      return { total: groups.reduce((sum, group) => sum + group._count._all, 0),
+        quoted: groups.find(group => group.status === 'Quoted')?._count._all ?? 0,
+        accepted: groups.find(group => group.status === 'Accepted')?._count._all ?? 0, recent: recent.map(asQuoteListItem) };
+    });
   }
   async function candidates(input: MatchInput): Promise<ContractCandidate[]> {
     await ensureCustomer(input.customerId, true);
@@ -130,6 +199,8 @@ export function createService(client: PrismaClient, dependencies: ServiceDepende
   }
   return {
     getSettings,
+    listQuotes,
+    getQuoteOverview,
     getCustomsExchangeRate: customsExchangeRate,
     async updateSettings(raw: unknown): Promise<Settings> {
       const parsed = settingsSchema.parse(raw) as Settings;
@@ -226,12 +297,18 @@ export function createService(client: PrismaClient, dependencies: ServiceDepende
           const counter = await tx.quoteCounter.upsert({ where: { date }, create: { date, sequence: 1 }, update: { sequence: { increment: 1 } } });
           number = `AFQ-${date}-${String(counter.sequence).padStart(4, '0')}`;
         }
+        const summary = quoteListItemFromRecord({ id: '', number, revision, rootId, customerId: input.customerId,
+          status: input.status, createdAt: snapshot.createdAt, snapshot });
         const row = await tx.quote.create({ data: {
           number, revision, rootId, customerId: input.customerId, contractVersionId: snapshot.contract?.id ?? null,
           transportMode: input.transportMode ?? 'AIR', routeScope: input.routeScope ?? 'AIRPORT',
           originCountry: input.originCountry ?? '', destinationCountry: input.destinationCountry ?? '',
           pricingBasis: snapshot.freight.basis ?? 'MANUAL', seaShipmentType: input.seaShipmentType ?? '',
           containerType: input.containerType ?? '', containerCount: input.containerCount ?? 0,
+          customerName: summary.customerName, customerCode: summary.customerCode, origin: summary.origin, destination: summary.destination,
+          analysisCurrency: summary.analysisCurrency, validity: summary.validity, revenue: summary.revenue, grossProfit: summary.grossProfit,
+          provisional: summary.provisional, quantity: summary.quantity, unit: summary.unit ?? '', appliedBreak: summary.appliedBreak,
+          chargeableWeight: summary.chargeableWeight, searchText: quoteSearchText(summary), searchVersion: 1,
           status: input.status, snapshot: JSON.stringify(snapshot), cargo: { create: input.cargo },
           charges: { create: snapshot.charges }, costs: { create: input.costs },
           ...(previousQuoteId ? { revisions: { create: { previousQuoteId, revision } } } : {}),

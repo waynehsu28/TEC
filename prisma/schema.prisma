@@ -122,6 +122,21 @@ model Quote {
   containerType     String @default("")
   containerCount    Int @default(0)
   snapshot          String
+  customerName      String @default("")
+  customerCode      String @default("")
+  origin            String @default("")
+  destination       String @default("")
+  analysisCurrency  String @default("USD")
+  validity          String @default("")
+  revenue           String?
+  grossProfit       String?
+  provisional       Boolean @default(false)
+  quantity          String?
+  unit              String @default("")
+  appliedBreak      String @default("")
+  chargeableWeight  String?
+  searchText        String @default("")
+  searchVersion     Int @default(0)
   cargo             QuoteCargoItem[]
   charges           QuoteCharge[]
   costs             QuoteCostItem[]
@@ -134,6 +149,10 @@ model Quote {
   @@index([deletedAt, createdAt])
   @@index([rootId, revision])
   @@index([status, createdAt])
+  @@index([deletedAt, createdAt, id])
+  @@index([deletedAt, customerId, createdAt, id])
+  @@index([deletedAt, transportMode, status, createdAt, id])
+  @@index([searchVersion, id])
   @@map("Quotes")
 }
 model QuoteCargoItem {

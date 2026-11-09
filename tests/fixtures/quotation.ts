@@ -1,4 +1,5 @@
-import type { Customer, Settings, QuoteInput, QuoteSnapshot, QuoteRecord } from '../../src/lib/types';
+import type { Customer, Settings, QuoteInput, QuoteSnapshot, QuoteRecord, QuotePage, QuoteOverview } from '../../src/lib/types';
+import { quoteListItemFromRecord } from '../../src/lib/quote-list';
 export const uiCustomer: Customer = { id: 'test-customer', name: '測試客戶', code: 'TEST', contact: '', email: '', phone: '', defaultCurrency: 'USD', remarks: '', status: 'ACTIVE' };
 export const uiSettings: Settings = { companyName: '測試公司', companyLogo: '', volumeDivisor: '6000', weightIncrement: '0.5', defaultCurrency: 'USD', exchangeRate: '', exchangeRateDate: '', terms: '' };
 export function quoteInput(patch: Partial<QuoteInput> = {}): QuoteInput {
@@ -17,4 +18,13 @@ export function quoteSnapshot(input = quoteInput()): QuoteSnapshot {
 }
 export function quoteRecord(input = quoteInput()): QuoteRecord {
   return { id: 'test-quote', number: 'AFQ-20261105-0001', revision: 1, rootId: null, customerId: input.customerId, status: input.status, createdAt: '2026-11-05T00:00:00.000Z', snapshot: quoteSnapshot(input) };
+}
+export function quotePage(records: QuoteRecord[] = [], page = 1, pageSize = 20): QuotePage {
+  const totalPages = Math.max(1, Math.ceil(records.length / pageSize));
+  const current = Math.min(page, totalPages);
+  return { items: records.slice((current - 1) * pageSize, current * pageSize).map(quoteListItemFromRecord), page: current, pageSize, total: records.length, totalPages };
+}
+export function quoteOverview(records: QuoteRecord[] = []): QuoteOverview {
+  return { total: records.length, quoted: records.filter(quote => quote.status === 'Quoted').length,
+    accepted: records.filter(quote => quote.status === 'Accepted').length, recent: records.slice(0, 6).map(quoteListItemFromRecord) };
 }

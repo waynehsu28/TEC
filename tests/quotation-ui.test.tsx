@@ -6,7 +6,7 @@ import { renderToString } from 'react-dom/server';
 import ModuleBoundary from '../src/components/ModuleBoundary';
 import QuoteEditor from '../src/components/QuoteEditor';
 import { readQuoteDraft, writeQuoteDraft } from '../src/lib/quote-draft';
-import { quoteInput, quoteRecord, quoteSnapshot, uiCustomer, uiSettings } from './fixtures/quotation';
+import { quoteInput, quoteRecord, quoteSnapshot, quotePage, quoteOverview, uiCustomer, uiSettings } from './fixtures/quotation';
 import type { QuoteInput } from '../src/lib/types';
 const response = (data: unknown, status = 200) => new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json' } });
 function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>(done => { resolve = done; }); return { promise, resolve }; }
@@ -21,7 +21,9 @@ function apiMock(options: { preview?: Promise<Response>; save?: Promise<Response
     if (path.endsWith('/api/quotes') && init?.method === 'POST') { const result = await (options.save ?? Promise.resolve(response(quoteRecord(JSON.parse(init.body as string)))));saved = result.ok;return result; }
     if (path.endsWith('/api/customers')) return response([uiCustomer]);
     if (path.endsWith('/api/contracts')) return response([]);
-    if (path.endsWith('/api/quotes')) return response(saved ? [quoteRecord()] : []);
+    if (path === '/api/quotes/overview') return response(quoteOverview(saved ? [quoteRecord()] : []));
+    if (path.startsWith('/api/quotes?')) return response(quotePage(saved ? [quoteRecord()] : []));
+    if (path === `/api/quotes/${quoteRecord().id}`) return response(quoteRecord());
     if (path.endsWith('/api/settings')) return response(uiSettings);
     throw new Error(`Unexpected test request: ${path}`);
   });

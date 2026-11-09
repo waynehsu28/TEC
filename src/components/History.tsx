@@ -1,6 +1,7 @@
 'use client';
-import { useEffect, useRef, useState } from 'react';
-import type { Customer, QuoteRecord, QuoteStatus, QuoteSnapshot } from '@/lib/types';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import type { Customer, QuoteListItem, QuotePage, QuoteRecord, QuoteStatus, QuoteSnapshot } from '@/lib/types';
+import { quoteListItemFromRecord } from '@/lib/quote-list';
 import { api, Badge, Empty, money } from './ui';
 import { modeName, routeLabel, chargeBasisLabels, formatQuantity, formatVolumeWeight } from '@/lib/transport';
 const statuses: QuoteStatus[] = ['Draft', 'Quoted', 'Accepted', 'Rejected', 'Expired'];
@@ -48,80 +49,185 @@ export function SnapshotDetails({ snapshot: s }: { snapshot: QuoteSnapshot }) {
     <h3>報價條件 Terms and Conditions</h3><p className="pre-wrap">{s.input.terms || '未設定'}</p><h3>備註 Remarks</h3><p className="pre-wrap">{s.input.remarks || '無'}</p>
   </>;
 }
-export default function History({ quotes, customers, customerFilter, onFilter, onRevise, selectedId, onSelect, onDeleted, onChanged }: {
-  quotes: QuoteRecord[]; customers: Customer[]; customerFilter: string; onFilter: (id: string) => void;
-  onRevise: (quote: QuoteRecord) => void; selectedId: string | null; onSelect: (id: string | null) => void;
-  onDeleted: (id: string) => void; onChanged: () => Promise<void>;
+
+interface Criteria { query: string; status: string; mode: string; page: number; pageSize: number; customerId: string }
+const criteriaKey = (criteria: Criteria) => JSON.stringify(criteria);
+type ListState = { key: string; status: 'loading' | 'ready' | 'error'; data?: QuotePage; error?: string };
+type DetailState = { id: string | null; status: 'loading' | 'ready' | 'error'; quote?: QuoteRecord; error?: string };
+async function readJson<T>(path: string, signal: AbortSignal): Promise<T> {
+  const response = await fetch(`/api/${path}`, { cache: 'no-store', signal });
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error || '讀取報價失敗，請重試。');
+  return data as T;
+}
+
+export default function History({ customers, customerFilter, onFilter, onRevise, selectedId, onSelect, onDeleted, onChanged }: {
+  customers: Customer[]; customerFilter: string; onFilter: (id: string) => void;
+  onRevise: (id: string) => void; selectedId: string | null; onSelect: (id: string | null) => void;
+  onDeleted: (quote: QuoteListItem) => void; onChanged: () => Promise<void>;
 }) {
-  const [query, setQuery] = useState(''), [status, setStatus] = useState(''), [mode, setMode] = useState('');
-  const [confirmation, setConfirmation] = useState<QuoteRecord | null>(null);
+  const [query, setQuery] = useState('');
+  const [criteria, setCriteria] = useState<Criteria>({ query: '', status: '', mode: '', page: 1, pageSize: 20, customerId: customerFilter });
+  const effective = criteria.customerId === customerFilter ? criteria : { ...criteria, customerId: customerFilter, page: 1 };
+  const requestKey = criteriaKey(effective);
+  const currentCriteria = useRef(effective), currentKey = useRef(requestKey);
+  currentCriteria.current = effective; currentKey.current = requestKey;
+  const [list, setList] = useState<ListState>({ key: '', status: 'loading' });
+  const [detail, setDetail] = useState<DetailState>({ id: null, status: 'loading' });
+  const [detailRetry, setDetailRetry] = useState(0);
+  const [confirmation, setConfirmation] = useState<QuoteListItem | null>(null);
   const [busy, setBusy] = useState(false), [error, setError] = useState(''), [success, setSuccess] = useState('');
   const [displayWarning, setDisplayWarning] = useState(''), [refreshWarning, setRefreshWarning] = useState(''), [refreshing, setRefreshing] = useState(false);
   const [deletedIds, setDeletedIds] = useState<Set<string>>(() => new Set());
-  const mounted = useRef(true), pending = useRef(false), operation = useRef(0);
+  const deleted = useRef(new Set<string>()), mounted = useRef(true), pending = useRef(false), operation = useRef(0);
+  const listGeneration = useRef(0), listController = useRef<AbortController | null>(null), skipEffectKey = useRef<string | null>(null);
+  const detailGeneration = useRef(0), detailController = useRef<AbortController | null>(null);
   const opener = useRef<HTMLButtonElement | null>(null), cancelButton = useRef<HTMLButtonElement | null>(null), search = useRef<HTMLInputElement | null>(null);
-  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; listGeneration.current++; detailGeneration.current++; listController.current?.abort(); detailController.current?.abort(); };
+  }, []);
+  useEffect(() => { setCriteria(current => current.customerId === customerFilter ? current : { ...current, customerId: customerFilter, page: 1 }); }, [customerFilter]);
+  useEffect(() => {
+    const timer = setTimeout(() => setCriteria(current => current.query === query.trim() ? current : { ...current, query: query.trim(), page: 1 }), 300);
+    return () => clearTimeout(timer);
+  }, [query]);
+
+  const loadPage = useCallback(async (): Promise<void> => {
+    if (!mounted.current) return;
+    const requested = currentCriteria.current, key = criteriaKey(requested), generation = ++listGeneration.current;
+    listController.current?.abort();
+    const controller = new AbortController(); listController.current = controller;
+    setList(current => ({ key, status: 'loading', data: current.key === key ? current.data : undefined }));
+    const params = new URLSearchParams({ page: String(requested.page), pageSize: String(requested.pageSize) });
+    if (requested.query) params.set('q', requested.query);
+    if (requested.status) params.set('status', requested.status);
+    if (requested.mode) params.set('transportMode', requested.mode);
+    if (requested.customerId) params.set('customerId', requested.customerId);
+    try {
+      const result = await readJson<QuotePage>(`quotes?${params}`, controller.signal);
+      if (!mounted.current || controller.signal.aborted || generation !== listGeneration.current || key !== currentKey.current) return;
+      if (!Array.isArray(result.items) || !Number.isSafeInteger(result.total) || !Number.isSafeInteger(result.page) || !Number.isSafeInteger(result.totalPages) || ![20, 50, 100].includes(result.pageSize) || result.items.length > result.pageSize || result.page < 1 || result.total < 0 || result.totalPages < 1 || result.page > result.totalPages) throw new Error('報價清單資料格式不正確，請重新讀取。');
+      const removed = result.items.filter(item => deleted.current.has(item.id)).length;
+      const total = Math.max(0, result.total - removed);
+      const data = { ...result, items: result.items.filter(item => !deleted.current.has(item.id)), total, totalPages: Math.max(1, Math.ceil(total / result.pageSize)) };
+      const canonical = { ...requested, page: result.page }, canonicalKey = criteriaKey(canonical);
+      if (canonicalKey !== key) {
+        skipEffectKey.current = canonicalKey;
+        setCriteria(current => criteriaKey(currentCriteria.current) === key ? { ...current, page: result.page, customerId: requested.customerId } : current);
+      }
+      setList({ key: canonicalKey, status: 'ready', data });
+    } catch (failure) {
+      if (!mounted.current || controller.signal.aborted || generation !== listGeneration.current || key !== currentKey.current) return;
+      const message = failure instanceof Error ? failure.message : '讀取報價失敗，請重試。';
+      setList(current => ({ key, status: 'error', data: current.key === key ? current.data : undefined, error: message }));
+      throw new Error(message);
+    }
+  }, []);
+  useEffect(() => {
+    if (skipEffectKey.current === requestKey) { skipEffectKey.current = null; return; }
+    void loadPage().catch(() => {});
+    return () => { listGeneration.current++; listController.current?.abort(); };
+  }, [requestKey, loadPage]);
+
+  useEffect(() => {
+    const generation = ++detailGeneration.current;
+    detailController.current?.abort();
+    if (!selectedId || deleted.current.has(selectedId)) { setDetail({ id: selectedId, status: 'ready' }); return; }
+    const controller = new AbortController(); detailController.current = controller;
+    setDetail({ id: selectedId, status: 'loading' });
+    void readJson<QuoteRecord>(`quotes/${selectedId}`, controller.signal).then(quote => {
+      if (!mounted.current || controller.signal.aborted || generation !== detailGeneration.current || deleted.current.has(selectedId)) return;
+      if (quote.id !== selectedId || !quote.snapshot) throw new Error('報價明細資料不完整，請重新讀取。');
+      setDetail({ id: selectedId, status: 'ready', quote });
+    }).catch(failure => {
+      if (mounted.current && !controller.signal.aborted && generation === detailGeneration.current) setDetail({ id: selectedId, status: 'error', error: failure instanceof Error ? failure.message : '讀取報價明細失敗。' });
+    });
+    return () => { controller.abort(); detailGeneration.current++; };
+  }, [selectedId, detailRetry]);
   useEffect(() => {
     if (confirmation) cancelButton.current?.focus();
-    else if (opener.current) {
-      if (opener.current.isConnected) opener.current.focus();
-      else search.current?.focus();
-      opener.current = null;
-    }
+    else if (opener.current) { if (opener.current.isConnected) opener.current.focus(); else search.current?.focus(); opener.current = null; }
   }, [confirmation?.id]);
 
-  function askDelete(quote: QuoteRecord, button: HTMLButtonElement) {
+  function askDelete(quote: QuoteListItem, button: HTMLButtonElement) {
     if (pending.current) return;
-    operation.current++;
-    opener.current = button;
+    operation.current++; opener.current = button;
     setConfirmation(quote); setError(''); setSuccess(''); setDisplayWarning(''); setRefreshWarning(''); setRefreshing(false);
   }
   async function refreshDeleted(id: number) {
     if (mounted.current && operation.current === id) setRefreshing(true);
-    try {
-      await onChanged();
-      if (mounted.current && operation.current === id) setRefreshWarning('');
-    } catch (failure) {
-      if (mounted.current && operation.current === id) setRefreshWarning(`報價已刪除，但重新讀取資料失敗：${(failure as Error).message}。請重新整理資料。`);
-    } finally { if (mounted.current && operation.current === id) setRefreshing(false); }
+    const results = await Promise.allSettled([mounted.current ? loadPage() : Promise.resolve(), Promise.resolve().then(onChanged)]);
+    if (mounted.current && operation.current === id) {
+      const failures = results.filter((result): result is PromiseRejectedResult => result.status === 'rejected');
+      setRefreshWarning(failures.length ? `報價已刪除，但重新讀取資料失敗：${failures.map(result => result.reason instanceof Error ? result.reason.message : String(result.reason)).join('；')}。請重新整理資料。` : '');
+      setRefreshing(false);
+    }
   }
   async function removeConfirmed() {
     if (!confirmation || pending.current) return;
     const target = confirmation, id = operation.current;
     pending.current = true; setBusy(true); setError('');
-    let deleted: { id: string; number: string; revision: number };
-    try { deleted = await api(`quotes/${target.id}`, 'DELETE'); }
+    let receipt: { id: string; number: string; revision: number };
+    try { receipt = await api(`quotes/${target.id}`, 'DELETE'); }
     catch (failure) { if (mounted.current && operation.current === id) setError((failure as Error).message); return; }
     finally { pending.current = false; if (mounted.current) setBusy(false); }
-
-    // A successful DELETE is committed even if a later display callback or refresh fails.
-    try { onDeleted(deleted.id); }
+    deleted.current.add(receipt.id); listGeneration.current++; listController.current?.abort();
+    try { onDeleted({ ...target, id: receipt.id }); }
     catch { if (mounted.current && operation.current === id) setDisplayWarning('報價已刪除，但畫面更新失敗。請重新整理資料。'); }
     if (mounted.current && operation.current === id) {
-      setDeletedIds(current => new Set([...current, deleted.id]));
-      setConfirmation(null);
-      setSuccess(`報價 ${deleted.number} Rev. ${deleted.revision} 已刪除。`);
+      setDeletedIds(new Set(deleted.current));
+      setList(current => {
+        if (!current.data) return current;
+        const found = current.data.items.some(item => item.id === receipt.id);
+        const total = Math.max(0, current.data.total - (found ? 1 : 0));
+        const totalPages = Math.max(1, Math.ceil(total / current.data.pageSize));
+        // The server must select the preceding page; an emptied last page is
+        // not a valid representation of that page while refresh is pending.
+        if (current.data.page > totalPages) return { ...current, data: undefined };
+        return { ...current, data: { ...current.data, items: current.data.items.filter(item => item.id !== receipt.id), total, totalPages } };
+      });
+      setConfirmation(null); setSuccess(`報價 ${receipt.number} Rev. ${receipt.revision} 已刪除。`);
     }
     void refreshDeleted(id);
   }
-  const filtered = quotes.filter(q => !deletedIds.has(q.id) && (!customerFilter || q.customerId === customerFilter) && (!status || q.status === status) && (!mode || (q.snapshot.input.transportMode || 'AIR') === mode) && `${q.number} ${q.snapshot.customer.name} ${routeLabel(q.snapshot.input)} ${q.snapshot.input.originCountry || ''} ${q.snapshot.input.destinationCountry || ''} ${q.snapshot.input.origin} ${q.snapshot.input.destination}`.toLowerCase().includes(query.toLowerCase()));
-  const selected = quotes.find(q => q.id === selectedId && !deletedIds.has(q.id));
-  function deleteButton(quote: QuoteRecord) {
-    return <button type="button" className="text-danger" style={{ color: 'var(--red)' }} disabled={busy} aria-label={`刪除 ${quote.number} Rev. ${quote.revision}`} onClick={event => askDelete(quote, event.currentTarget)}>刪除</button>;
+
+  const searchPending = query.trim() !== effective.query;
+  const currentPage = list.key === requestKey && !searchPending ? list.data : undefined;
+  const listPending = searchPending || list.key !== requestKey || list.status === 'loading';
+  const rows = currentPage?.items.filter(item => !deletedIds.has(item.id)) ?? [];
+  const selected = selectedId && detail.id === selectedId && !deletedIds.has(selectedId) ? detail.quote : undefined;
+  const detailPending = selectedId && !deletedIds.has(selectedId) && (detail.id !== selectedId || detail.status === 'loading');
+  function changeFilter(patch: Partial<Criteria>) { setCriteria(current => ({ ...current, ...patch, customerId: customerFilter, page: 1 })); }
+  function deleteButton(quote: QuoteListItem, disabled = false) {
+    return <button type="button" className="text-danger" style={{ color: 'var(--red)' }} disabled={busy || disabled} aria-label={`刪除 ${quote.number} Rev. ${quote.revision}`} onClick={event => askDelete(quote, event.currentTarget)}>刪除</button>;
   }
   return <>
-    <div className="toolbar"><div className="search-group"><input ref={search} aria-label="搜尋歷史報價" placeholder="搜尋報價編號、客戶、國家或航線" value={query} onChange={e => setQuery(e.target.value)} /><select aria-label="歷史客戶篩選" value={customerFilter} onChange={e => onFilter(e.target.value)}><option value="">全部客戶</option>{customers.map(c => <option key={c.id} value={c.id}>{c.code} · {c.name}</option>)}</select><select aria-label="歷史運輸方式" value={mode} onChange={e => setMode(e.target.value)}><option value="">海空運全部</option><option value="AIR">空運 Air</option><option value="SEA">海運 Sea</option></select><select aria-label="報價狀態篩選" value={status} onChange={e => setStatus(e.target.value)}><option value="">全部狀態</option>{statuses.map(s => <option key={s}>{s}</option>)}</select></div><span className="muted">{filtered.length} 筆報價 / 修訂</span></div>
+    <div className="toolbar"><div className="search-group">
+      <input ref={search} aria-label="搜尋歷史報價" maxLength={120} placeholder="搜尋報價編號、客戶、國家或航線" value={query} onChange={event => setQuery(event.target.value)} />
+      <select aria-label="歷史客戶篩選" value={customerFilter} onChange={event => { changeFilter({ customerId: event.target.value }); onFilter(event.target.value); }}><option value="">全部客戶</option>{customers.map(customer => <option key={customer.id} value={customer.id}>{customer.code} · {customer.name}</option>)}</select>
+      <select aria-label="歷史運輸方式" value={effective.mode} onChange={event => changeFilter({ mode: event.target.value })}><option value="">海空運全部</option><option value="AIR">空運 Air</option><option value="SEA">海運 Sea</option></select>
+      <select aria-label="報價狀態篩選" value={effective.status} onChange={event => changeFilter({ status: event.target.value })}><option value="">全部狀態</option>{statuses.map(status => <option key={status}>{status}</option>)}</select>
+      <label>每頁 <select aria-label="每頁筆數" value={effective.pageSize} onChange={event => changeFilter({ pageSize: Number(event.target.value) })}>{[20, 50, 100].map(size => <option key={size} value={size}>{size} 筆</option>)}</select></label>
+    </div><span className="muted">{currentPage ? `共 ${currentPage.total} 筆報價 / 修訂` : listPending ? '正在查詢報價' : '尚未取得報價數量'}</span></div>
     {success && <div role="status" className="alert success">{success}</div>}
     {displayWarning && <div role="alert" className="alert warning">{displayWarning}</div>}
     {refreshWarning && <div role="alert" className="alert warning">{refreshWarning} <button type="button" className="btn-secondary" disabled={refreshing} onClick={() => { void refreshDeleted(operation.current); }}>{refreshing ? '同步中…' : '重新整理資料'}</button></div>}
     {confirmation && <section className="panel" role="dialog" aria-labelledby="quote-delete-title" aria-describedby="quote-delete-description" aria-busy={busy} onKeyDown={event => { if (event.key === 'Escape' && !busy) setConfirmation(null); }}>
-      <h2 id="quote-delete-title">確認刪除報價</h2>
-      <p><strong>{confirmation.number} · Rev. {confirmation.revision}</strong></p><p>客戶：{confirmation.snapshot.customer.name}（{confirmation.snapshot.customer.code}）</p>
-      <p id="quote-delete-description">只刪除所選的這筆報價，其他修訂版本保留。刪除後，此畫面無法復原。</p>
-      {error && <div role="alert" className="alert danger">{error}</div>}
+      <h2 id="quote-delete-title">確認刪除報價</h2><p><strong>{confirmation.number} · Rev. {confirmation.revision}</strong></p><p>客戶：{confirmation.customerName}（{confirmation.customerCode}）</p>
+      <p id="quote-delete-description">只刪除所選的這筆報價，其他修訂版本保留。刪除後，此畫面無法復原。</p>{error && <div role="alert" className="alert danger">{error}</div>}
       <div className="actions"><button type="button" ref={cancelButton} className="btn-secondary" disabled={busy} onClick={() => setConfirmation(null)}>取消</button><button type="button" className="btn" style={{ backgroundColor: 'var(--red)' }} disabled={busy} onClick={() => { void removeConfirmed(); }}>{busy ? '刪除中…' : '確認刪除'}</button></div>
     </section>}
-    {selected && <article className="panel"><div className="section-title"><div><h2>{selected.number} <Badge>Rev. {selected.revision}</Badge></h2><p className="muted">{modeName(selected.snapshot.input.transportMode)} · {new Date(selected.createdAt).toLocaleString('zh-TW')} · {selected.status} · 已儲存快照</p></div><div className="row-actions"><a className="btn" href={`/api/quotes/${selected.id}/pdf`} download>下載客戶 PDF</a><button type="button" className="btn-secondary" onClick={() => onRevise(selected)}>建立修訂版本</button>{deleteButton(selected)}<button type="button" className="btn-secondary" onClick={() => onSelect(null)}>關閉</button></div></div><SnapshotDetails snapshot={selected.snapshot} /></article>}
-    <div className="panel table-wrap"><table><thead><tr><th>報價編號 / 修訂</th><th>運輸方式 / 客戶 / 國家</th><th>日期</th><th>Revenue</th><th>Gross Profit</th><th>狀態</th><th>操作</th></tr></thead><tbody>{filtered.map(q => <tr key={q.id}><td><strong>{q.number}</strong><small>Rev. {q.revision}</small></td><td><Badge>{modeName(q.snapshot.input.transportMode)}{q.snapshot.input.seaShipmentType ? ` ${q.snapshot.input.seaShipmentType}` : ''}</Badge><small>{q.snapshot.customer.name} · {routeLabel(q.snapshot.input)}</small></td><td>{new Date(q.createdAt).toLocaleDateString('zh-TW')}<small>有效至 {q.snapshot.input.validity}</small></td><td>{q.snapshot.input.analysisCurrency} {money(q.snapshot.finance.revenue)}</td><td className={q.snapshot.finance.negativeProfit ? 'text-danger' : ''}>{q.snapshot.finance.grossProfit === null ? 'Cost Not Available' : `${q.snapshot.input.analysisCurrency} ${money(q.snapshot.finance.grossProfit)}`}<small>{q.snapshot.finance.provisional ? '暫估 / 不完整' : ''}</small></td><td><Badge tone={q.status === 'Accepted' ? 'success' : ''}>{q.status}</Badge></td><td><div className="row-actions"><button type="button" onClick={() => onSelect(q.id)}>明細</button><a href={`/api/quotes/${q.id}/pdf`} download>PDF</a><button type="button" onClick={() => onRevise(q)}>修訂 / 變更狀態</button>{deleteButton(q)}</div></td></tr>)}</tbody></table>{!filtered.length && <Empty>尚無符合條件的報價。報價儲存後會在此保留完整歷史快照。</Empty>}</div>
+    {detailPending && <div role="status" className="panel">正在讀取報價明細…</div>}
+    {selectedId && !deletedIds.has(selectedId) && detail.id === selectedId && detail.status === 'error' && <div role="alert" className="panel alert danger">{detail.error} <button type="button" className="btn-secondary" onClick={() => setDetailRetry(value => value + 1)}>重新讀取明細</button><button type="button" className="btn-secondary" onClick={() => onSelect(null)}>關閉明細</button></div>}
+    {selected && <article className="panel"><div className="section-title"><div><h2>{selected.number} <Badge>Rev. {selected.revision}</Badge></h2><p className="muted">{modeName(selected.snapshot.input.transportMode)} · {new Date(selected.createdAt).toLocaleString('zh-TW')} · {selected.status} · 已儲存快照</p></div><div className="row-actions"><a className="btn" href={`/api/quotes/${selected.id}/pdf`} download>下載客戶 PDF</a><button type="button" className="btn-secondary" onClick={() => onRevise(selected.id)}>建立修訂版本</button>{deleteButton(quoteListItemFromRecord(selected))}<button type="button" className="btn-secondary" onClick={() => onSelect(null)}>關閉</button></div></div><SnapshotDetails snapshot={selected.snapshot} /></article>}
+    {listPending && <div role="status" className="alert">正在讀取報價清單…</div>}
+    {list.key === requestKey && list.status === 'error' && !refreshWarning && <div role="alert" className="alert danger">報價清單讀取失敗：{list.error} {currentPage && '目前顯示已載入的當頁資料。'}<button type="button" className="btn-secondary" onClick={() => { void loadPage().catch(() => {}); }}>重新讀取報價</button></div>}
+    <div className="panel table-wrap" aria-busy={listPending}><table><thead><tr><th>報價編號 / 修訂</th><th>運輸方式 / 客戶 / 國家</th><th>日期</th><th>Revenue</th><th>Gross Profit</th><th>狀態</th><th>操作</th></tr></thead><tbody>{rows.map(quote => <tr key={quote.id}>
+      <td><strong>{quote.number}</strong><small>Rev. {quote.revision}</small></td><td><Badge>{modeName(quote.transportMode)}{quote.seaShipmentType ? ` ${quote.seaShipmentType}` : ''}</Badge><small>{quote.customerName} · {routeLabel(quote)}</small></td><td>{new Date(quote.createdAt).toLocaleDateString('zh-TW')}{quote.validity && <small>有效至 {quote.validity}</small>}</td><td>{quote.analysisCurrency} {money(quote.revenue)}</td>
+      <td className={quote.grossProfit !== null && quote.grossProfit.startsWith('-') ? 'text-danger' : ''}>{quote.grossProfit === null ? 'Cost Not Available' : `${quote.analysisCurrency} ${money(quote.grossProfit)}`}<small>{quote.provisional ? '暫估 / 不完整' : ''}</small></td><td><Badge tone={quote.status === 'Accepted' ? 'success' : ''}>{quote.status}</Badge></td>
+      <td><div className="row-actions"><button type="button" disabled={listPending} onClick={() => onSelect(quote.id)}>明細</button><a href={`/api/quotes/${quote.id}/pdf`} download>PDF</a><button type="button" disabled={listPending} onClick={() => onRevise(quote.id)}>修訂 / 變更狀態</button>{deleteButton(quote, listPending)}</div></td>
+    </tr>)}</tbody></table>{!listPending && list.status === 'ready' && currentPage?.total === 0 && <Empty>尚無符合條件的報價。請調整搜尋或篩選條件。</Empty>}</div>
+    <div className="toolbar" aria-label="報價分頁"><span>{currentPage ? `第 ${currentPage.page} / ${currentPage.totalPages} 頁 · 共 ${currentPage.total} 筆` : '尚未取得頁面資料'}</span><div className="row-actions"><button type="button" className="btn-secondary" disabled={!currentPage || listPending || currentPage.page <= 1} onClick={() => setCriteria(current => ({ ...current, customerId: customerFilter, page: (currentPage?.page ?? 1) - 1 }))}>上一頁</button><button type="button" className="btn-secondary" disabled={!currentPage || listPending || currentPage.page >= currentPage.totalPages} onClick={() => setCriteria(current => ({ ...current, customerId: customerFilter, page: (currentPage?.page ?? 1) + 1 }))}>下一頁</button></div></div>
   </>;
 }
